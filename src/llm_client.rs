@@ -1,6 +1,5 @@
-// FILE: src/llm_client.rs
 use crate::spex_plugin::generate_request::LlmConfig;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -13,14 +12,13 @@ pub struct LlmClient {
 
 impl LlmClient {
     pub fn new(config: LlmConfig) -> Self {
-        Self {
-            client: Client::new(),
-            config,
-        }
+        // Build a client; request-specific timeouts set per-call below as well.
+        let client = Client::new();
+        Self { config, client }
     }
 
     pub async fn generate(&self, prompt: &str) -> Result<String> {
-        let timeout = Duration::from_secs(self.config.timeout_s as u64);
+        let timeout = Duration::from_secs(self.config.timeout_s.max(1) as u64);
         let provider = &self.config.provider;
 
         let (url, payload) = match provider.as_str() {
@@ -33,19 +31,21 @@ impl LlmClient {
                 }),
             ),
             "gemini" => (
-                format!("{}/models/{}:generateContent?key={}", self.config.base_url, self.config.model, self.config.api_key),
+                format!(
+                    "{}/models/{}:generateContent?key={}",
+                    self.config.base_url, self.config.model, self.config.api_key
+                ),
                 json!({
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {"temperature": self.config.temperature},
                 }),
             ),
-            _ => return Err(anyhow::anyhow!("Unsupported LLM provider: {}", provider)),
+            other => return Err(anyhow!("Unsupported LLM provider: {}", other)),
         };
 
         info!("Sending request to {} model {}", provider, self.config.model);
 
         let mut builder = self.client.post(&url).timeout(timeout).json(&payload);
-
         if provider == "openai" {
             builder = builder.bearer_auth(&self.config.api_key);
         }
@@ -58,10 +58,12 @@ impl LlmClient {
 
     fn parse_response(&self, provider: &str, data: &Value) -> Result<String> {
         let text = match provider {
+            // Correctly index arrays
             "openai" => data["choices"][0]["message"]["content"].as_str(),
             "gemini" => data["candidates"][0]["content"]["parts"][0]["text"].as_str(),
             _ => None,
         };
+
         text.map(String::from)
             .context(format!("Failed to parse LLM response for {}", provider))
     }

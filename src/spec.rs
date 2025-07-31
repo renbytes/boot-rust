@@ -1,10 +1,8 @@
-// FILE: src/spec.rs
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// SpexSpecification defines the schema for a project specification.
-/// Core fields are required; everything else is captured in `extras`.
+/// Project specification (top-level).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpexSpecification {
@@ -17,7 +15,6 @@ pub struct SpexSpecification {
 
     pub project: Project,
 
-    /// Arbitrary extra sections like [[features]], [datasets], etc.
     #[serde(flatten)]
     pub extras: HashMap<String, Value>,
 }

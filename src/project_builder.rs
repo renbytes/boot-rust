@@ -1,12 +1,7 @@
-// FILE: src/project_builder.rs
-//! Robust packaging of generated files and rendered infrastructure templates.
-//!
-//! Goals:
-//! - Parse LLM output reliably (### FILE: headers + triple-backtick fences).
-//! - Sanitize non-markdown files so accidental code fences / FILE markers don’t leak into artifacts.
-//! - Keep stdout-sensitive files (e.g., Cargo.toml) clean.
-//! - Be defensive about paths (no absolute paths, no traversal).
-//! - Make behavior observable via `tracing`.
+//! Packaging of generated files and rendered infrastructure templates.
+//! - Parses ### FILE: blocks with fenced content
+//! - Sanitizes non-markdown outputs (strip accidental fences / headers)
+//! - Normalizes paths (no absolute, no parent traversal), skips templates/
 
 use crate::{
     spec::SpexSpecification,
@@ -21,54 +16,34 @@ use tera::{Context as TeraContext, Tera};
 use tracing::{debug, info, warn};
 
 lazy_static! {
-    /// Match LLM file blocks, e.g.:
-    ///
-    /// ### FILE: path/to/file.ext
-    /// ```lang
-    /// <content>
-    /// ```
-    ///
-    /// - Supports optional language after the opening backticks.
-    /// - Handles `\n` or `\r\n`.
-    /// - Content is captured non-greedily up to the first matching closing fence.
+    // No leading ^ so we can find multiple blocks anywhere.
     static ref FILE_BLOCK_REGEX: Regex = Regex::new(
-        r"(?s)^\s*###\s*FILE:\s*(?P<path>[^\r\n]+)\r?\n```(?P<lang>[^\r\n`]*)\r?\n(?P<content>.*?)\r?\n```(?=\r?\n|$)"
+        r"(?s)###\s*FILE:\s*(?P<path>[^\r\n]+)\r?\n```(?P<lang>[^\r\n`]*)\r?\n(?P<content>.*?)\r?\n```"
     ).expect("valid FILE_BLOCK_REGEX");
 
-    /// Matches an entire file wrapped in a single triple-backtick fence, with optional language.
-    /// We use this to strip accidental full-file fencing in non-markdown outputs.
     static ref FULL_FENCE_RE: Regex =
-        Regex::new(r"(?s)^\s*```[a-zA-Z0-9_-]*\s*\r?\n(.*)\r?\n```\s*$")
-            .expect("valid FULL_FENCE_RE");
+        Regex::new(r"(?s)^\s*```[a-zA-Z0-9_-]*\s*\r?\n(.*)\r?\n```\s*$").expect("valid FULL_FENCE_RE");
 
-    /// Matches a leading "### FILE: ..." header line.
     static ref FILE_MARKER_RE: Regex =
-        Regex::new(r"(?m)^\s*###\s+FILE:.*\r?\n")
-            .expect("valid FILE_MARKER_RE");
+        Regex::new(r"(?m)^\s*###\s+FILE:.*\r?\n").expect("valid FILE_MARKER_RE");
 
-    /// Matches a UTF-8 BOM at the beginning of a string.
     static ref LEADING_BOM_RE: Regex =
-        Regex::new(r"^\u{FEFF}")
-            .expect("valid LEADING_BOM_RE");
+        Regex::new(r"^\u{FEFF}").expect("valid LEADING_BOM_RE");
 }
 
-/// Returns `true` if the path should be treated as markdown-like
-/// (we do not strip code fences for these).
 fn is_markdown_like(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
     p.ends_with(".md") || p.ends_with(".markdown") || p.ends_with(".rst")
 }
 
-/// Normalize newlines to `\n`.
 fn normalize_newlines(s: &str) -> Cow<'_, str> {
-    // Fast path: if no CR present, return borrowed.
     if !s.as_bytes().contains(&b'\r') {
-        return Cow::Borrowed(s);
+        Cow::Borrowed(s)
+    } else {
+        Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))
     }
-    Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-/// Strip a single leading UTF-8 BOM if present.
 fn strip_bom(s: &str) -> Cow<'_, str> {
     if LEADING_BOM_RE.is_match(s) {
         Cow::Owned(LEADING_BOM_RE.replace(s, "").into_owned())
@@ -77,7 +52,6 @@ fn strip_bom(s: &str) -> Cow<'_, str> {
     }
 }
 
-/// Remove a single leading "### FILE: ..." marker line.
 fn strip_leading_file_marker(s: &str) -> Cow<'_, str> {
     if FILE_MARKER_RE.is_match(s) {
         Cow::Owned(FILE_MARKER_RE.replace(s, "").into_owned())
@@ -86,21 +60,13 @@ fn strip_leading_file_marker(s: &str) -> Cow<'_, str> {
     }
 }
 
-/// If the entire string is wrapped in a single triple-backtick fence, return the inner content.
 fn strip_full_file_fence(s: &str) -> Option<String> {
     FULL_FENCE_RE
         .captures(s)
         .and_then(|cap| cap.get(1).map(|m| m.as_str().to_string()))
 }
 
-/// For non-markdown files:
-/// - strip a single leading "### FILE:" header if present
-/// - strip a single surrounding ```fence``` if the *whole* file is fenced
-/// Always:
-/// - drop a leading BOM if present
-/// - normalize newlines to `\n`
 fn sanitize_nonmarkdown_output(path: &str, content: &str) -> String {
-    // Always canonicalize simple text issues first.
     let content = strip_bom(content);
     let content = normalize_newlines(&content);
 
@@ -108,7 +74,6 @@ fn sanitize_nonmarkdown_output(path: &str, content: &str) -> String {
         return content.into_owned();
     }
 
-    // Remove accidental FILE markers and full-file fences for non-markdown.
     let no_marker = strip_leading_file_marker(&content).into_owned();
     if let Some(inner) = strip_full_file_fence(&no_marker) {
         normalize_newlines(&inner).into_owned()
@@ -117,28 +82,20 @@ fn sanitize_nonmarkdown_output(path: &str, content: &str) -> String {
     }
 }
 
-/// Return `Some(sanitized_path)` if the path is acceptable and within the project dir.
-/// Rejects absolute paths and paths containing `..` components.
 fn sanitize_path(path: &str) -> Option<String> {
-    // Convert Windows backslashes to forward slashes for consistency.
     let mut p = path.replace('\\', "/").trim().to_string();
-
     if p.is_empty() {
         return None;
     }
-    // Strip a leading "./"
     if let Some(stripped) = p.strip_prefix("./") {
         p = stripped.to_string();
     }
-    // No absolute paths
     if Path::new(&p).is_absolute() {
         return None;
     }
-    // No templates/ files in the final artifact (these are source templates)
     if p.starts_with("templates/") {
         return None;
     }
-    // Disallow path traversal
     let has_traversal = Path::new(&p)
         .components()
         .any(|c| matches!(c, Component::ParentDir));
@@ -148,7 +105,6 @@ fn sanitize_path(path: &str) -> Option<String> {
     Some(p)
 }
 
-/// Insert or replace a file in `response.files` by `path`.
 fn upsert_file(response: &mut GenerateResponse, path: String, content: String) {
     if let Some(idx) = response.files.iter().position(|f| f.path == path) {
         debug!("Replacing existing file: {}", path);
@@ -159,17 +115,6 @@ fn upsert_file(response: &mut GenerateResponse, path: String, content: String) {
     }
 }
 
-/// Extract code blocks from LLM output and package them as files.
-///
-/// Expected block shape:
-/// ```text
-/// ### FILE: relative/path.ext
-/// ```<lang>
-/// <content>
-/// ```
-/// ```
-///
-/// Any block with an invalid or disallowed path is skipped with a warning.
 pub fn package_code_files(llm_output: &str, response: &mut GenerateResponse) {
     let mut count = 0usize;
     for cap in FILE_BLOCK_REGEX.captures_iter(llm_output) {
@@ -179,7 +124,6 @@ pub fn package_code_files(llm_output: &str, response: &mut GenerateResponse) {
 
         match sanitize_path(raw_path) {
             Some(path) => {
-                // For non-markdown files, perform extra cleanup; for markdown, keep as-is (with normalized newlines/BOM stripping).
                 let cleaned = sanitize_nonmarkdown_output(&path, content);
                 upsert_file(response, path.clone(), cleaned);
                 info!("Packaged code file: {} (lang='{}')", path, lang);
@@ -197,8 +141,6 @@ pub fn package_code_files(llm_output: &str, response: &mut GenerateResponse) {
     }
 }
 
-/// Render infrastructure templates (Cargo.toml, Makefile, README, etc.)
-/// Applies the same sanitization to prevent accidental fences in non-markdown outputs.
 pub fn package_infrastructure_files(
     tera: &Tera,
     spec: &SpexSpecification,
@@ -208,7 +150,6 @@ pub fn package_infrastructure_files(
     let mut context = TeraContext::new();
     context.insert("spec", spec);
 
-    // Flatten extras into the context (e.g., features, binary_name, etc.).
     for (key, value) in &spec.extras {
         context.insert(key, value);
     }
@@ -224,7 +165,6 @@ pub fn package_infrastructure_files(
             .render(template_name, &context)
             .with_context(|| format!("Failed to render template: {}", template_name))?;
 
-        // For non-markdown files, strip accidental FILE markers / top-level fences.
         let content = sanitize_nonmarkdown_output(&path, &rendered);
         upsert_file(response, path.clone(), content);
         info!("Packaged infrastructure file from template: {}", template_name);
