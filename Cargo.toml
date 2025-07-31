@@ -1,0 +1,43 @@
+### FILE: Cargo.toml
+[package]
+name = "spex-rust"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spex-rust"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# gRPC and Protobuf
+tonic = "0.11"
+prost = "0.12"
+
+# Templating (Jinja2 equivalent)
+tera = "1.19"
+
+# HTTP Client for LLM calls
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization/Deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error Handling
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Regular Expressions for parsing LLM output
+regex = "1.10"
+lazy_static = "1.4"
+tokio-stream = { version = "0.1.17", features = ["net"] }
+
+[build-dependencies]
+tonic-build = "0.11"

@@ -1,0 +1,66 @@
+### FILE: templates/rust/prompt_templates/generation.tera
+{# Minimal generator; relies on rust_rules.tera for all best practices #}
+
+### CRITICAL RULES ###
+1. **NO CONVERSATIONAL TEXT**: Your response must begin *immediately* with `### FILE:` and contain only file blocks.
+2. **STRICT FORMAT**: Every file must be emitted as:
+
+### FILE: <relative/path.ext>
+<full file content>
+
+(no extra prose before/between/after)
+3. **APPLY IMPORTED RULES**: All engineering, structure, error-handling, logging, testing, and project-type guidance comes from the included rules below.
+
+---
+### RESPONSE FORMAT ###
+Emit only file blocks like:
+
+### FILE: Cargo.toml
+# full TOML
+
+### FILE: src/lib.rs
+// full Rust source
+
+### FILE: src/main.rs
+// full Rust source
+
+### FILE: tests/cli.rs
+// full test (only if a binary/CLI exists)
+
+{# Pull in the full Rust rules and best practices #}
+{% include "rust/instructions/rust_rules.tera" %}
+
+{# Derive minimal defaults (use named args for default) #}
+{% set pkg_name = spec.package_name | default(value="spex_app") %}
+{% set bin_name = spec.binary_name  | default(value=pkg_name) %}
+{% set pt       = spec.project_type | default(value="cli") %}
+
+USER SPECIFICATION
+
+Target Language: {{ spec.language }}
+Project Type: {{ pt }}
+Project Description: {{ spec.description }}
+
+Core Features to Implement:
+{% for feature in spec.features | default(value=[]) %}
+
+Feature: {{ feature.name }}
+
+Description: {{ feature.description }}
+{% endfor %}
+
+---
+CODE GENERATION TASK
+
+- Choose the correct structure and dependencies **per the imported rules** and `project_type`:
+  - `"cli"` → CLI app (clap derive, thin `main`, core logic in `lib`, `[[bin]] name="{{ bin_name }}"`).
+  - `"service"` → async service (tokio; HTTP via axum or gRPC via tonic; graceful shutdown; health check).
+  - `"library"` → library crate (typed errors via thiserror; docs & examples).
+  - Unrecognized → default to CLI.
+
+- Generate a **complete, runnable** Rust project that compiles on stable with `edition = "2021"` and passes `cargo test`.
+- Ensure logging goes to **stderr**, stdout is clean, and no `.unwrap()`/`.expect()` in normal paths.
+- If tests refer to a specific binary name, define it via `[[bin]]` in `Cargo.toml`.
+- README/Makefile must match actual tasks (don’t reference non-existent targets).
+
+### BEGIN OUTPUT NOW — emit only file blocks, no extra prose.

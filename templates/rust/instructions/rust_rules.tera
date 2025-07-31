@@ -1,0 +1,304 @@
+# Rust Project Rules (Generalized)
+
+A generalized, production-friendly rule set you can apply across CLI apps, services, and libraries. Includes best practices, structure patterns, and baked‑in fixes for common pitfalls we just debugged.
+
+---
+
+## ✅ Global Best Practices
+
+- **Edition & MSRV**
+  - Target `edition = "2021"` (or the repo’s declared edition).
+  - Keep compatibility with the project’s Minimum Supported Rust Version (MSRV) if specified.
+
+- **Error Handling**
+  - **Applications (bins):** Use `anyhow::Result<T>` and `anyhow::Context` at the edges (e.g., `main` and top-level orchestrators).
+  - **Libraries:** Prefer _typed errors_ with `thiserror`. Do **not** return `Result<T, String>`; ensure the error type implements `std::error::Error`.
+
+- **No Panics in Normal Operation**
+  - Avoid `.unwrap()`/`.expect()` in library code and user paths.
+  - Propagate failures using `?` and convert/annotate with `Context` at boundaries.
+
+- **Ownership & Performance**
+  - Prefer borrowing (`&str`, `&[T]`, `&T`) over cloning.
+  - Use iterators and combinators; pre‑allocate where helpful (e.g., `with_capacity`).
+
+- **Logging & Observability**
+  - Use `tracing` + `tracing-subscriber`.
+  - **Logs go to stderr** by default; reserve **stdout** for program output or machine‑readable protocols (e.g., handshakes).
+
+- **Formatting & Lints**
+  - Enforce `rustfmt` and `clippy` in CI (`clippy -D warnings`).
+  - Keep code idiomatic and warning‑free.
+
+- **Docs**
+  - Write `rustdoc` for public items.
+  - Provide crate‑level docs with purpose, usage, and examples.
+
+- **Testing**
+  - Unit tests in `#[cfg(test)]` modules.
+  - Integration tests in `tests/`.
+  - For CLIs/services, use `assert_cmd` to run binaries and `predicates`/`insta` for output assertions or snapshots.
+  - Consider `proptest`/`quickcheck` for property‑based tests where sensible.
+
+- **Serialization**
+  - Prefer strongly typed structs with `serde`.
+  - If you must use `serde_json::Value`, **validate array/object shapes** and handle missing keys safely.
+
+- **Feature Flags**
+  - Keep optional deps behind `features`. Provide sensible defaults; document feature implications.
+
+- **Cross‑platform**
+  - Use `std::path::Path`/`PathBuf`; avoid hard‑coded separators.
+  - Use `dirs`/`dirs-next` for platform‑specific directories.
+
+- **Security**
+  - Validate untrusted input; avoid shelling out (`Command` with explicit args is safer).
+  - Use vetted crates for crypto (e.g., `ring`, `sha2`).
+
+---
+
+## ✅ Project Structure Patterns (choose what fits the spec)
+
+- **Library crate**
+  - `src/lib.rs` only. Expose a small, well‑documented API.
+  - Use typed errors via `thiserror`.
+
+- **Binary + Library**
+  - Thin `src/main.rs` that calls into `lib` (`use <crate_name>::...`).
+  - Keep business logic in the library for testability.
+
+- **Service (async)**
+  - Use `tokio` runtime; avoid blocking in async contexts.
+  - Implement graceful shutdown on `SIGINT/SIGTERM`.
+  - Provide health/readiness endpoints and structured logs.
+
+- **CLI**
+  - Use `clap` derive. Split subcommands into modules (e.g., `src/commands/*.rs`).
+  - Validate arguments with `clap` validators and types.
+
+- **WASM / `no_std`**
+  - Respect environment constraints; gate features and avoid unsupported APIs.
+
+---
+
+## NON‑NEGOTIABLE REQUIREMENTS
+
+1. **Clear Error Types**
+   - **Apps:** `fn main() -> anyhow::Result<()>`.
+   - **Libs:** No `Result<_, String>`. Use `thiserror` (preferred) or ensure your error implements `Error`.
+
+2. **No Early Stdout Noise**
+   - Never print logs/banners to **stdout** before machine‑readable output (e.g., protocol handshakes). Use **stderr** for logs.
+
+3. **Separation of Concerns**
+   - If a binary exists, it must be a thin wrapper that calls into a properly structured library.
+
+4. **Tests Must Build & Run**
+   - If tests reference a binary by name, define it via `[[bin]]` in `Cargo.toml` and include required dev‑dependencies.
+
+---
+
+## Project‑Type Guidance
+
+### If `project_type` == `"cli"`
+- **Parsing:** Use `clap = { version = "4", features = ["derive"] }`.
+- **Binary naming:** {% raw %}If tests call `Command::cargo_bin("{{ spec.binary_name | default("app") }}")`, add:{% endraw %}
+
+{% raw %}
+```toml
+[[bin]]
+name = "{{ spec.binary_name | default("app") }}"
+path = "src/main.rs"
+```
+{% endraw %}
+
+* **Dev‑deps for tests:**
+
+{% raw %}
+```toml
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+```
+{% endraw %}
+
+### If writing a service (e.g. gRPC/HTTP/worker)
+
+* Runtime: `tokio` (multi‑threaded).
+* HTTP: `axum`/`hyper`; gRPC: `tonic`.
+* **Graceful shutdown:** listen for `SIGINT/SIGTERM`, drain tasks, close listeners.
+* **Config:** Use `config`/`dotenvy`; validate config structs.
+* **Health & Metrics:** `/healthz` endpoint; emit metrics and tracing spans.
+
+### If writing a library:
+
+* Public API documented with examples.
+* Typed errors via `thiserror`; no panics as part of the API contract.
+* Avoid leaking concrete dependency types in public signatures when possible.
+
+### If project is a wasm or constrained
+
+* Gate non‑portable code with features.
+* Avoid blocking APIs; prefer async and message passing.
+
+---
+
+## Common Pitfalls & How to Avoid Them
+
+* **Binary importing lib incorrectly**
+
+  * In `src/main.rs`, import from the library using the crate name (package name with `-`→`_`):
+
+{% raw %}
+```rust
+use spex_vcs::commands; // ✅ not `use crate::commands;` in the bin
+```
+{% endraw %}
+
+* **`anyhow::Context` on `Result<(), String>` (E0599)**
+
+  * Don’t return `String` errors. Either:
+
+    * Return `anyhow::Result<()>` from library functions, **or**
+    * Define a `thiserror` enum and return `Result<T, YourError>`.
+
+* **Binary name mismatch in tests**
+
+  * If tests call `cargo_bin("my_cli")`, ensure:
+
+{% raw %}
+```toml
+[[bin]]
+name = "my_cli"
+path = "src/main.rs"
+```
+{% endraw %}
+
+* **Logs pollute stdout / break handshakes**
+
+  * Route logs to **stderr**:
+
+{% raw %}
+```rust
+tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+// eprintln!("...") is also fine for simple cases
+```
+{% endraw %}
+
+* **Ad‑hoc JSON indexing errors**
+
+  * Prefer typed structs with `serde`.
+  * If using `serde_json::Value`, correctly index arrays and validate shape:
+
+{% raw %}
+```rust
+let content = data["choices"][0]["message"]["content"]
+    .as_str()
+    .ok_or_else(|| anyhow::anyhow!("missing content"))?;
+```
+{% endraw %}
+
+* **Template/spec key drift**
+
+  * Keep variables consistent. Use `{{ spec.project_type }}` (not `analysis_type`).
+  * Add a simple template render test in CI to catch mismatches early.
+
+* **Missing dev‑deps for CLI tests**
+
+{% raw %}
+```toml
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+```
+{% endraw %}
+
+* **Blocking in async services**
+
+  * Wrap blocking work with `tokio::task::spawn_blocking` or use async equivalents.
+
+---
+
+## Code Sketches the Generator Should Emit (when applicable)
+
+**Binary entry (CLI/service):**
+
+{% raw %}
+```rust
+// src/main.rs
+use anyhow::{Context, Result};
+
+fn main() -> Result<()> {
+    // initialize logging to stderr
+    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+
+    // thin wrapper that calls into lib
+    spex_vcs::run().context("app failed")?;
+    Ok(())
+}
+```
+{% endraw %}
+
+**Library error pattern:**
+{% raw %}
+```rust
+// src/error.rs
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+```
+{% endraw %}
+
+**Library API returning typed errors:**
+{% raw %}
+```rust
+// src/lib.rs
+pub mod error;
+use error::AppError;
+
+/// Entry point for the application/library.
+pub fn run() -> Result<(), AppError> {
+    // ... business logic ...
+    Ok(())
+}
+```
+{% endraw %}
+**Cargo (when tests spawn a named bin):**
+{% raw %}
+```toml
+[package]
+name = "{{ spec.package_name | default("app") }}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# plus `clap = { version = "4", features = ["derive"] }` for CLIs
+# plus async stack for services when needed
+
+[[bin]]
+name = "{{ spec.binary_name | default("app") }}"
+path = "src/main.rs"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+```
+{% endraw %}
+---
+
+## Deliverables Expected from the Generator
+
+* Correct crate layout for the `project_type` (library, binary+library, service, etc.).
+* Compiles without warnings on `stable`.
+* Tests pass (`cargo test`). If a CLI/service, include at least one integration test spawning the bin.
+* `README.md` matches actual Makefile/Cargo tasks (don’t document `make setup` unless it exists).
+* No stdout output before required machine‑readable handshake/protocol messages.

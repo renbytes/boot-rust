@@ -1,0 +1,899 @@
+
+--- START OF FILE: Cargo.toml ---
+### FILE: Cargo.toml
+[package]
+name = "spex-rust"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spex-rust"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# gRPC and Protobuf
+tonic = "0.11"
+prost = "0.12"
+
+# Templating (Jinja2 equivalent)
+tera = "1.19"
+
+# HTTP Client for LLM calls
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization/Deserialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Error Handling
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Regular Expressions for parsing LLM output
+regex = "1.10"
+lazy_static = "1.4"
+tokio-stream = { version = "0.1.17", features = ["net"] }
+
+[build-dependencies]
+tonic-build = "0.11"
+
+--- END OF FILE: Cargo.toml ---
+
+
+--- START OF FILE: README.md ---
+
+--- END OF FILE: README.md ---
+
+
+--- START OF FILE: build.rs ---
+// FILE: build.rs
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tonic_build::compile_protos("proto/plugin.proto")?;
+    Ok(())
+}
+--- END OF FILE: build.rs ---
+
+
+--- START OF FILE: create ---
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Root directory for the new project
+ROOT="spex-rust"
+
+# Create directories
+mkdir -p "$ROOT"/proto
+mkdir -p "$ROOT"/src
+mkdir -p "$ROOT"/templates/rust/instructions
+mkdir -p "$ROOT"/templates/rust/patterns
+mkdir -p "$ROOT"/templates/rust/prompt_templates
+mkdir -p "$ROOT"/templates/shared
+
+# Create top-level files
+touch "$ROOT"/Cargo.toml
+touch "$ROOT"/README.md
+touch "$ROOT"/build.rs
+
+# Create proto files
+touch "$ROOT"/proto/plugin.proto
+
+# Create source files
+touch "$ROOT"/src/main.rs
+touch "$ROOT"/src/server.rs
+touch "$ROOT"/src/llm_client.rs
+touch "$ROOT"/src/prompt_builder.rs
+touch "$ROOT"/src/project_builder.rs
+touch "$ROOT"/src/spec.rs
+
+# Create template files
+touch "$ROOT"/templates/rust/Cargo.toml.template
+touch "$ROOT"/templates/rust/Makefile.template
+touch "$ROOT"/templates/rust/main.rs.template
+touch "$ROOT"/templates/rust/instructions/rust_rules.tera
+touch "$ROOT"/templates/rust/patterns/cli_patterns.tera
+touch "$ROOT"/templates/rust/prompt_templates/generation.tera
+touch "$ROOT"/templates/rust/prompt_templates/review.tera
+touch "$ROOT"/templates/shared/README.md.template
+touch "$ROOT"/templates/shared/gitignore.template
+
+echo "✅ spex-rust skeleton created successfully."
+--- END OF FILE: create ---
+
+
+--- START OF FILE: proto/plugin.proto ---
+// proto/plugin.proto
+// This file defines the gRPC service contract for all Spex language plugins.
+syntax = "proto3";
+package plugin;
+
+// The SpexPlugin service is the core of the plugin system. It defines the
+// set of remote procedure calls (RPCs) that the main Spex application can
+// invoke on a language plugin.
+service SpexPlugin {
+  // GenerateProject is the primary RPC. It takes a single request containing
+  // all necessary configuration and the user's specification, and it returns
+  // a complete set of files for the new project.
+  rpc GenerateProject(GenerateRequest) returns (GenerateResponse) {}
+}
+
+// GenerateRequest contains all the information a plugin needs to perform
+// a complete code generation task. It is sent from the core Spex app to the plugin.
+message GenerateRequest {
+  // The full, raw content of the user's `spec.toml` file. The plugin is
+  // responsible for parsing and validating this content. This keeps the
+  // plugin fully decoupled from the core application's internal models.
+  string spec_toml_content = 1;
+
+  // LLMConfig contains all the necessary runtime configuration for the plugin
+  // to make a call to a Large Language Model. This information is passed
+  // through from the core app's settings.
+  message LLMConfig {
+    // The provider to use (e.g., "openai", "gemini").
+    string provider = 1;
+    // The specific model identifier (e.g., "gpt-4o-mini").
+    string model = 2;
+    // The API key for the specified provider.
+    string api_key = 3;
+    // The base URL for the provider's API endpoint.
+    string base_url = 4;
+    // The generation temperature.
+    float temperature = 5;
+    // The network timeout in seconds for the API request.
+    int32 timeout_s = 6;
+  }
+
+  // The LLM configuration for this specific request.
+  LLMConfig llm_config = 2;
+
+  // A flag indicating whether this is the second "review" pass in a
+  // two-pass generation workflow.
+  bool is_review_pass = 3;
+
+  // If `is_review_pass` is true, this field will contain the complete,
+  // file-formatted code generated during the first pass.
+  string initial_code = 4;
+}
+
+// File represents a single file to be created in the generated project.
+message File {
+  // The relative path of the file from the project root
+  // (e.g., "src/main.rs" or ".gitignore").
+  string path = 1;
+  // The complete, raw content of the file.
+  string content = 2;
+}
+
+// GenerateResponse is the message sent from the plugin back to the core Spex
+// application. It contains the complete result of a generation task.
+message GenerateResponse {
+  // A list of all files that make up the generated project. The core
+  // application will be responsible for writing these files to disk.
+  repeated File files = 1;
+}
+--- END OF FILE: proto/plugin.proto ---
+
+
+--- START OF FILE: src/llm_client.rs ---
+// FILE: src/llm_client.rs
+use crate::spex_plugin::generate_request::LlmConfig;
+use anyhow::{Context, Result};
+use reqwest::Client;
+use serde_json::{json, Value};
+use std::time::Duration;
+use tracing::info;
+
+pub struct LlmClient {
+    config: LlmConfig,
+    client: Client,
+}
+
+impl LlmClient {
+    pub fn new(config: LlmConfig) -> Self {
+        Self {
+            client: Client::new(),
+            config,
+        }
+    }
+
+    pub async fn generate(&self, prompt: &str) -> Result<String> {
+        let timeout = Duration::from_secs(self.config.timeout_s as u64);
+        let provider = &self.config.provider;
+
+        let (url, payload) = match provider.as_str() {
+            "openai" => (
+                format!("{}/chat/completions", self.config.base_url),
+                json!({
+                    "model": self.config.model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": self.config.temperature,
+                }),
+            ),
+            "gemini" => (
+                format!("{}/models/{}:generateContent?key={}", self.config.base_url, self.config.model, self.config.api_key),
+                json!({
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": self.config.temperature},
+                }),
+            ),
+            _ => return Err(anyhow::anyhow!("Unsupported LLM provider: {}", provider)),
+        };
+
+        info!("Sending request to {} model {}", provider, self.config.model);
+
+        let mut builder = self.client.post(&url).timeout(timeout).json(&payload);
+
+        if provider == "openai" {
+            builder = builder.bearer_auth(&self.config.api_key);
+        }
+
+        let response = builder.send().await?.error_for_status()?;
+        let response_json: Value = response.json().await?;
+
+        self.parse_response(provider, &response_json)
+    }
+
+    fn parse_response(&self, provider: &str, data: &Value) -> Result<String> {
+        let text = match provider {
+            "openai" => data["choices"]["message"]["content"].as_str(),
+            "gemini" => data["candidates"]["content"]["parts"]["text"].as_str(),
+            _ => None,
+        };
+
+        text.map(String::from)
+           .context(format!("Failed to parse LLM response for {}", provider))
+    }
+}
+--- END OF FILE: src/llm_client.rs ---
+
+
+--- START OF FILE: src/main.rs ---
+// FILE: src/main.rs
+
+use std::net::SocketAddr;
+use tonic::transport::Server;
+use tokio_stream::wrappers::TcpListenerStream;
+
+mod llm_client;
+mod project_builder;
+mod prompt_builder;
+mod server;
+mod spec;
+
+// Import the servicer from the now-declared server module.
+use server::RustPluginServicer;
+
+// Define the generated gRPC module.
+pub mod spex_plugin {
+    tonic::include_proto!("plugin");
+}
+use spex_plugin::spex_plugin_server::SpexPluginServer;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize the tracing subscriber to write all logs to stderr.
+    // This keeps stdout clean for the IPC handshake.
+    tracing_subscriber::fmt()
+       .with_writer(std::io::stderr)
+       .init();
+
+    // Bind to an available TCP port on the loopback address.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr: SocketAddr = listener.local_addr()?;
+
+    // Construct the handshake string that the Python host expects.
+    let handshake_string = format!("1|1|tcp|{}:{}|grpc", addr.ip(), addr.port());
+
+    // Create an instance of our gRPC service implementation.
+    let plugin_service = RustPluginServicer::new()?;
+    let server = SpexPluginServer::new(plugin_service);
+
+    // Print the handshake string to stdout. This is the only thing
+    // that should be printed to stdout during the entire process lifecycle.
+    println!("{}", handshake_string);
+
+    // Start the gRPC server.
+    Server::builder()
+       .add_service(server)
+       .serve_with_incoming(TcpListenerStream::new(listener))
+       .await?;
+
+    Ok(())
+}
+--- END OF FILE: src/main.rs ---
+
+
+--- START OF FILE: src/project_builder.rs ---
+// FILE: src/project_builder.rs
+use crate::{
+    spec::SpexSpecification,
+    spex_plugin::{File, GenerateResponse},
+};
+use anyhow::Result;
+use lazy_static::lazy_static;
+use regex::Regex;
+use tera::{Context, Tera};
+use tracing::info;
+
+lazy_static! {
+    static ref FILE_BLOCK_REGEX: Regex =
+        Regex::new(r"(?s)### FILE:\s*(?P<path>[^\n]+)\n```[^\n]*\n(?P<content>.*?)```")
+            .unwrap();
+}
+
+/// Extract code blocks from LLM output and package them as files.
+pub fn package_code_files(llm_output: &str, response: &mut GenerateResponse) {
+    for cap in FILE_BLOCK_REGEX.captures_iter(llm_output) {
+        let path = cap.name("path").map_or("", |m| m.as_str()).trim();
+        let content = cap.name("content").map_or("", |m| m.as_str()).trim();
+
+        if !path.is_empty() {
+            response.files.push(File {
+                path: path.to_string(),
+                content: content.to_string(),
+            });
+            info!("Packaged code file: {}", path);
+        }
+    }
+}
+
+/// Render infrastructure templates (Cargo.toml, Makefile, README, etc.)
+pub fn package_infrastructure_files(
+    tera: &Tera,
+    spec: &SpexSpecification,
+    response: &mut GenerateResponse,
+) -> Result<()> {
+    info!("Packaging infrastructure files...");
+    let mut context = Context::new();
+    context.insert("spec", spec);
+
+    // Insert extras into context so templates can loop over them
+    for (key, value) in &spec.extras {
+        context.insert(key, value);
+    }
+
+    let templates = vec![
+        ("Cargo.toml".to_string(), "rust/Cargo.toml.template"),
+        ("Makefile".to_string(), "rust/Makefile.template"),
+        ("README.md".to_string(), "rust/README.md.template"),
+    ];
+
+    for (path, template_name) in templates {
+        let content = tera.render(template_name, &context)?;
+        response.files.push(File {
+            path,
+            content,
+        });
+        info!("Packaged infrastructure file: {}", template_name);
+    }
+    Ok(())
+}
+--- END OF FILE: src/project_builder.rs ---
+
+
+--- START OF FILE: src/prompt_builder.rs ---
+// FILE: src/prompt_builder.rs
+use crate::{spec::SpexSpecification, spex_plugin::GenerateRequest};
+use anyhow::{Context, Result};
+use tera::{Context as TeraContext, Tera};
+
+pub fn render_prompt(
+    tera: &Tera,
+    spec: &SpexSpecification,
+    request: &GenerateRequest,
+) -> Result<String> {
+    let template_type = if request.is_review_pass { "review" } else { "generation" };
+    let template_path = format!("rust/prompt_templates/{}.tera", template_type);
+
+    let mut context = TeraContext::new();
+    context.insert("spec", spec);
+    if request.is_review_pass {
+        context.insert("initial_code", &request.initial_code);
+    }
+
+    tera.render(&template_path, &context)
+       .context(format!("Failed to render template: {}", template_path))
+}
+--- END OF FILE: src/prompt_builder.rs ---
+
+
+--- START OF FILE: src/server.rs ---
+// FILE: src/server.rs
+
+// This file xclusively defines the gRPC service
+// implementation. The server startup logic, including binding the TCP listener
+// and printing the handshake string, has been moved to `src/main.rs`. This
+// separation of concerns resolves the startup race condition and aligns with
+// standard Rust application architecture.
+
+use crate::{llm_client::LlmClient, project_builder, prompt_builder, spec::SpexSpecification};
+use anyhow::Result;
+use std::path::Path;
+use tera::Tera;
+use tonic::{Request, Response, Status};
+use tracing::{error, info};
+
+// Use the gRPC types generated in `main.rs` via the `spex_plugin` module.
+// This avoids including the proto file in multiple places.
+use crate::spex_plugin::{
+    spex_plugin_server::SpexPlugin, GenerateRequest, GenerateResponse,
+};
+
+/// Implements the gRPC service for the Rust plugin.
+///
+/// This struct holds the state required for the service, such as the template
+/// rendering engine.
+pub struct RustPluginServicer {
+    tera: Tera,
+}
+
+impl RustPluginServicer {
+    /// Creates a new instance of the plugin servicer.
+    ///
+    /// This function is now public so it can be called from `main.rs`. It
+    /// initializes the Tera template engine by loading all templates from the
+    /// `templates` directory.
+    pub fn new() -> Result<Self> {
+        let templates_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+           .join("templates")
+           .join("**")
+           .join("*.{tera,template}");
+
+        let tera = Tera::new(templates_path.to_str().unwrap())?;
+        info!("Jinja2-like template environment loaded successfully.");
+        Ok(Self { tera })
+    }
+}
+
+#[tonic::async_trait]
+impl SpexPlugin for RustPluginServicer {
+    /// The core RPC method that handles the project generation request.
+    ///
+    /// This function orchestrates the entire code generation process within the
+    /// plugin, from parsing the spec to calling the LLM and packaging the
+    /// resulting files.
+    async fn generate_project(
+        &self,
+        request: Request<GenerateRequest>,
+    ) -> Result<Response<GenerateResponse>, Status> {
+        info!("Received GenerateProject request.");
+        let req = request.into_inner();
+
+        // 1. Parse the specification from the request.
+        let spec: SpexSpecification = toml::from_str(&req.spec_toml_content).map_err(|e| {
+            error!("Failed to parse spec.toml content: {}", e);
+            Status::invalid_argument(format!("Invalid spec.toml: {}", e))
+        })?;
+
+        // 2. Get LLM configuration from the request.
+        let llm_config = req.llm_config.clone().ok_or_else(|| {
+            error!("LLMConfig is missing from the request.");
+            Status::invalid_argument("LLMConfig is required")
+        })?;
+
+        // 3. Initialize the LLM client.
+        let llm_client = LlmClient::new(llm_config);
+
+        // 4. Render the prompt using the specification and templates.
+        let prompt = prompt_builder::render_prompt(&self.tera, &spec, &req).map_err(|e| {
+            error!("Failed to render generation prompt: {}", e);
+            Status::internal(format!("Failed to render prompt: {}", e))
+        })?;
+
+        // 5. Call the LLM to generate the code.
+        let llm_output = llm_client.generate(&prompt).await.map_err(|e| {
+            error!("LLM generation failed: {}", e);
+            Status::internal(format!("LLM generation failed: {}", e))
+        })?;
+
+        // 6. Assemble the response by packaging the generated files.
+        let mut response = GenerateResponse::default();
+        project_builder::package_code_files(&llm_output, &mut response);
+        project_builder::package_infrastructure_files(&self.tera, &spec, &mut response).map_err(
+
+|e| {
+                error!("Failed to package infrastructure files: {}", e);
+                Status::internal(format!("Failed to package infrastructure files: {}", e))
+            },
+        )?;
+
+        info!("Successfully generated project files. Sending response.");
+        Ok(Response::new(response))
+    }
+}
+--- END OF FILE: src/server.rs ---
+
+
+--- START OF FILE: src/spec.rs ---
+// FILE: src/spec.rs
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
+
+/// SpexSpecification defines the schema for a project specification.
+/// Core fields are required; everything else is captured in `extras`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpexSpecification {
+    pub language: String,
+
+    #[serde(rename = "project_type")]
+    pub project_type: String,
+
+    pub description: String,
+
+    pub project: Project,
+
+    /// Arbitrary extra sections like [[features]], [datasets], etc.
+    #[serde(flatten)]
+    pub extras: HashMap<String, Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Project {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+}
+--- END OF FILE: src/spec.rs ---
+
+
+--- START OF FILE: templates/rust/.gitignore.template ---
+
+--- END OF FILE: templates/rust/.gitignore.template ---
+
+
+--- START OF FILE: templates/rust/Cargo.toml.template ---
+```toml
+### FILE: templates/rust/Cargo.toml.template
+[package]
+name = "{{ spec.project.name }}"
+version = "{{ spec.project.version }}"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+anyhow = "1.0"
+```
+--- END OF FILE: templates/rust/Cargo.toml.template ---
+
+
+--- START OF FILE: templates/rust/Makefile.template ---
+### FILE: templates/rust/Makefile.template
+.PHONY: help build run test clean
+
+help:
+	@echo "Available commands:"
+	@echo "  build   - Build the project in release mode"
+	@echo "  run     - Run the project"
+	@echo "  test    - Run tests"
+	@echo "  clean   - Clean the project"
+
+build:
+	cargo build --release
+
+run:
+	cargo run
+
+test:
+	cargo test
+
+clean:
+	cargo clean
+--- END OF FILE: templates/rust/Makefile.template ---
+
+
+--- START OF FILE: templates/rust/README.md.template ---
+# {{ spec.project.name }}
+{{ spec.project.description }}
+
+This project was automatically generated by Spex. It contains a complete, runnable, and tested software project scaffolded according to modern best practices for the {{ spec.language }} language.
+
+## Overview
+
+Goal: {{ spec.description }}
+
+Language: {{ spec.language }}
+
+Project Type: {{ spec.project_type }}
+
+## Getting Started
+This project includes a Makefile to simplify common development tasks.
+
+### 1. Setup the Environment
+
+First, ensure you have the necessary toolchain for {{ spec.language }} installed on your system. Then, set up the project environment:bash
+
+This command will install dependencies, compile code, etc.
+```
+make setup
+```
+
+### 2. Run the Application
+
+Execute the main application with the default run command:
+
+```bash
+# This will run the primary executable or script.
+make run
+```
+
+### 3. Run Tests
+
+To verify the correctness of the implementation, run the test suite:
+
+```
+make test
+```
+
+Project Structure
+```
+.
+├── src/                  # Source code for the application/library
+├── tests/                # Unit and integration tests
+├── Makefile              # Commands for building, running, and testing
+├──.gitignore            # Standard git ignore file
+└── README.md             # This file
+```
+
+## Core Logic
+
+The primary business logic is driven by the following requirements defined in the original specification:
+
+{% for feature in spec.features %}
+
+{{ feature.name }}: {{ feature.description }}
+{% endfor %}
+
+This project was generated by Spex.
+
+--- END OF FILE: templates/rust/README.md.template ---
+
+
+--- START OF FILE: templates/rust/instructions/rust_rules.tera ---
+
+### FILE: templates/rust/instructions/rust_rules.tera
+### RUST-SPECIFIC RULES ###
+
+**✅ Idiomatic Rust Best Practices:**
+- Use `clap` with the `derive` macro for all command-line argument parsing.
+- Use `anyhow::Result` for application-level error handling in `main.rs`.
+- Separate library logic into `src/lib.rs` and the binary entry point into `src/main.rs`.
+- Write comprehensive `rustdoc` comments for all public functions, structs, and modules.
+- Adhere strictly to standard Rust formatting (`rustfmt`).
+
+**✅ Safety and Performance:**
+- Avoid using `.unwrap()` or `.expect()` on `Option` or `Result` types. Propagate errors with the `?` operator.
+- Prefer iterators and functional-style methods (`.map()`, `.filter()`, etc.) over manual `for` loops.
+- Use references and borrowing (`&`, `&mut`) to avoid unnecessary data cloning.
+- Use `String` for owned, mutable strings and `&str` for borrowed string slices.
+
+### NON-NEGOTIABLE REQUIREMENTS ###
+
+**1.  `CLAP` FOR CLI IS MANDATORY**: All CLI argument parsing MUST be implemented using the `clap` crate's `derive` macro. Do not parse `std::env::args` manually.
+
+**2.  NO PANICS**: The generated code MUST NOT use `.unwrap()` or `.expect()`. All potential failures must be handled gracefully using the `Result` type and propagated with the `?` operator. The `main` function must return a `Result<(), anyhow::Error>`.
+
+**3.  MODULAR STRUCTURE**: You MUST separate the core logic into a library crate (`src/lib.rs`) and have the binary (`src/main.rs`) act as a thin wrapper that calls into the library. This ensures the logic is reusable and testable.
+
+--- END OF FILE: templates/rust/instructions/rust_rules.tera ---
+
+
+--- START OF FILE: templates/rust/main.rs.template ---
+// FILE: templates/rust/main.rs.template
+use anyhow::Result;
+use clap::Parser;
+
+/// {{ spec.project.description }}
+
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long)]
+    name: String,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    println!("Hello, {}!", cli.name);
+    Ok(())
+}
+--- END OF FILE: templates/rust/main.rs.template ---
+
+
+--- START OF FILE: templates/rust/patterns/cli_patterns.tera ---
+```rust
+### FILE: templates/rust/patterns/cli_patterns.tera
+**✅ GOOD: Using `clap` for argument parsing and `anyhow` for error handling.**
+```rust
+// src/main.rs
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+
+/// A fictional versioning CLI
+#
+#[clap(name = "git", version)]
+struct Cli {
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#
+enum Commands {
+    /// Add a file
+    #[clap(arg_required_else_help = true)]
+    Add {
+        /// The path to the file to add
+        path: std::path::PathBuf,
+    },
+    /// Commit changes
+    #[clap(arg_required_else_help = true)]
+    Commit {
+        /// The commit message
+        #[clap(short, long)]
+        message: String,
+    },
+}
+
+fn main() -> Result<()> {
+    let args = Cli::parse();
+    match args.command {
+        Commands::Add { path } => {
+            println!("Adding file: {}", path.display());
+            // Business logic here...
+        }
+        Commands::Commit { message } => {
+            println!("Committing with message: {}", message);
+            // Business logic here...
+        }
+    }
+    Ok(())
+}
+✅ GOOD: Writing integration tests for the CLI using assert_cmd.
+
+Rust
+// tests/cli.rs
+use assert_cmd::prelude::*;
+use std::process::Command;
+
+#[test]
+fn test_add_command() {
+    let mut cmd = Command::cargo_bin("my_cli").unwrap();
+    cmd.arg("add").arg("test.txt");
+    cmd.assert()
+       .success()
+       .stdout(predicates::str::contains("Adding file: test.txt"));
+}
+--- END OF FILE: templates/rust/patterns/cli_patterns.tera ---
+
+
+--- START OF FILE: templates/rust/prompt_templates/generation.tera ---
+### FILE: templates/rust/prompt_templates/generation.tera
+You are an expert-level Rust engineer specializing in building robust, production-grade command-line interface (CLI) tools. Your task is to generate a complete, runnable Rust project based on the user's specification.
+
+### CRITICAL RULES ###
+1.  **NO CONVERSATIONAL TEXT**: Your response must begin *immediately* with `### FILE:...` and contain only file blocks.
+2.  **COMPLETE IMPLEMENTATION**: Generate fully functional, tested code. The project must compile and run.
+3.  **RUST BEST PRACTICES**: Adhere to modern Rust idioms. Use `clap` for argument parsing and `anyhow` for error handling.
+4.  **MODULARITY**: Separate logic into appropriate modules if the complexity warrants it.
+5.  **DOCUMENTATION**: Add `rustdoc` comments to public functions and structs.
+
+---
+### RESPONSE FORMAT ###
+Your response must consist of multiple file blocks in this exact format:
+
+### FILE: src/lib.rs
+```rust
+// Complete file content here
+FILE: src/main.rs
+```
+
+```rust
+// Another complete file
+FILE: tests/cli.rs
+```
+
+```rust
+// A test file
+```
+
+{% include "rust/patterns/cli_patterns.tera" %}
+
+USER SPECIFICATION
+
+Target Language: {{ spec.language }}
+Project Type: {{ spec.project_type }}
+Project Description: {{ spec.description }}
+
+Core Features to Implement:
+{% for feature in spec.features %}
+
+Feature: {{ feature.name }}
+
+Description: {{ feature.description }}
+{% endfor %}
+
+CODE GENERATION TASK
+
+Based on the specification and patterns, generate the complete Rust source code for the following files:
+
+src/lib.rs (if logic is complex enough to warrant a library)
+
+src/main.rs (the main CLI entry point)
+
+Any other necessary modules (e.g., src/commands.rs).
+
+tests/cli.rs (integration tests for the CLI).
+
+Begin your response now.
+
+--- END OF FILE: templates/rust/prompt_templates/generation.tera ---
+
+
+--- START OF FILE: templates/rust/prompt_templates/review.tera ---
+### FILE: templates/rust/prompt_templates/review.tera
+{% include "shared/instructions/base_instructions.tera" %}
+{% include "shared/instructions/response_format.tera" %}
+
+You are a Principal Rust Engineer specializing in systems programming and performance optimization. You are tasked with **refactoring** a junior developer's code for a production release. The provided code is a first draft and is known to contain inefficiencies and non-idiomatic patterns.
+
+**Your task is not to add new features, but to rewrite the existing code** to be highly performant, idiomatic, safe, and maintainable, following the strict architectural patterns provided. The logical output must remain the same, but the implementation must be replaced with production-grade Rust.
+
+---
+### ORIGINAL SPECIFICATION ###
+---
+
+Target Language: {{ spec.language }}
+Project Type: {{ spec.project_type }}
+Project Description: {{ spec.description }}
+
+---
+### GENERATED CODE TO REVIEW ###
+---
+
+```rust
+{{ initial_code }}
+```
+REFACTORING INSTRUCTIONS
+
+Analyze the GENERATED CODE TO REVIEW. Identify all violations of the NON-NEGOTIABLE REQUIREMENTS and common Rust anti-patterns.
+
+Create a Refactoring Plan: Before writing any code, add a comment block in the src/main.rs or src/lib.rs file outlining your plan. Specifically mention which anti-patterns you identified and how your new implementation will fix them. For example:
+
+Rust
+// REFACTORING PLAN
+// 1. Identified multiple uses of `.unwrap()`, which can cause panics. These will be replaced with proper error handling using the `anyhow` crate and the `?` operator.
+// 2. The original code used manual argument parsing. This will be refactored to use the `clap` crate with the derive macro for robust and idiomatic CLI parsing.
+// 3. The error handling was inconsistent. The new implementation will use a unified `anyhow::Result<()>` return type from `main` for clean error propagation.
+// 4. Logic was monolithic in `main.rs`. I will extract the core business logic into a separate `lib.rs` to make it a reusable library and improve testability.
+Rewrite the Code: Based on your plan, rewrite the files from scratch to be production-ready.
+
+RUST-SPECIFIC REVIEW FOCUS
+
+Error Handling: Replace all uses of .unwrap() and .expect() with Result and the ? operator. Use anyhow for application-level errors.
+
+CLI Parsing: Ensure clap is used correctly with the derive feature for a clean, declarative argument structure.
+
+Idiomatic Code: Use iterators and functional patterns over manual loops where appropriate. Follow standard Rust formatting (rustfmt).
+
+Safety and Performance: Check for unnecessary allocations, cloning, or inefficient algorithms. Ensure proper ownership and borrowing.
+
+Modularity: Separate library logic from the binary entry point (src/lib.rs vs src/main.rs).
+
+Final Instruction: Begin your response immediately with ### FILE:.... Do not include any conversational preamble, summary, or explanation. Your entire response must be only the generated code files. Adhere strictly to this format.
+--- END OF FILE: templates/rust/prompt_templates/review.tera ---
+
+
+--- START OF FILE: templates/shared/README.md.template ---
+
+--- END OF FILE: templates/shared/README.md.template ---
+
+
+--- START OF FILE: templates/shared/gitignore.template ---
+
+--- END OF FILE: templates/shared/gitignore.template ---

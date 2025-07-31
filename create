@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Root directory for the new project
+ROOT="spex-rust"
+
+# Create directories
+mkdir -p "$ROOT"/proto
+mkdir -p "$ROOT"/src
+mkdir -p "$ROOT"/templates/rust/instructions
+mkdir -p "$ROOT"/templates/rust/patterns
+mkdir -p "$ROOT"/templates/rust/prompt_templates
+mkdir -p "$ROOT"/templates/shared
+
+# Create top-level files
+touch "$ROOT"/Cargo.toml
+touch "$ROOT"/README.md
+touch "$ROOT"/build.rs
+
+# Create proto files
+touch "$ROOT"/proto/plugin.proto
+
+# Create source files
+touch "$ROOT"/src/main.rs
+touch "$ROOT"/src/server.rs
+touch "$ROOT"/src/llm_client.rs
+touch "$ROOT"/src/prompt_builder.rs
+touch "$ROOT"/src/project_builder.rs
+touch "$ROOT"/src/spec.rs
+
+# Create template files
+touch "$ROOT"/templates/rust/Cargo.toml.template
+touch "$ROOT"/templates/rust/Makefile.template
+touch "$ROOT"/templates/rust/main.rs.template
+touch "$ROOT"/templates/rust/instructions/rust_rules.tera
+touch "$ROOT"/templates/rust/patterns/cli_patterns.tera
+touch "$ROOT"/templates/rust/prompt_templates/generation.tera
+touch "$ROOT"/templates/rust/prompt_templates/review.tera
+touch "$ROOT"/templates/shared/README.md.template
+touch "$ROOT"/templates/shared/gitignore.template
+
+echo "✅ spex-rust skeleton created successfully."

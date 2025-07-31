@@ -1,0 +1,62 @@
+```rust
+### FILE: templates/rust/patterns/cli_patterns.tera
+**✅ GOOD: Using `clap` for argument parsing and `anyhow` for error handling.**
+```rust
+// src/main.rs
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+
+/// A fictional versioning CLI
+#
+#[clap(name = "git", version)]
+struct Cli {
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#
+enum Commands {
+    /// Add a file
+    #[clap(arg_required_else_help = true)]
+    Add {
+        /// The path to the file to add
+        path: std::path::PathBuf,
+    },
+    /// Commit changes
+    #[clap(arg_required_else_help = true)]
+    Commit {
+        /// The commit message
+        #[clap(short, long)]
+        message: String,
+    },
+}
+
+fn main() -> Result<()> {
+    let args = Cli::parse();
+    match args.command {
+        Commands::Add { path } => {
+            println!("Adding file: {}", path.display());
+            // Business logic here...
+        }
+        Commands::Commit { message } => {
+            println!("Committing with message: {}", message);
+            // Business logic here...
+        }
+    }
+    Ok(())
+}
+✅ GOOD: Writing integration tests for the CLI using assert_cmd.
+
+Rust
+// tests/cli.rs
+use assert_cmd::prelude::*;
+use std::process::Command;
+
+#[test]
+fn test_add_command() {
+    let mut cmd = Command::cargo_bin("my_cli").unwrap();
+    cmd.arg("add").arg("test.txt");
+    cmd.assert()
+       .success()
+       .stdout(predicates::str::contains("Adding file: test.txt"));
+}

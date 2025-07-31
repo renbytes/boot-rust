@@ -1,0 +1,50 @@
+### FILE: templates/rust/prompt_templates/review.tera
+{% include "shared/instructions/base_instructions.tera" %}
+{% include "shared/instructions/response_format.tera" %}
+
+You are a Principal Rust Engineer specializing in systems programming and performance optimization. You are tasked with **refactoring** a junior developer's code for a production release. The provided code is a first draft and is known to contain inefficiencies and non-idiomatic patterns.
+
+**Your task is not to add new features, but to rewrite the existing code** to be highly performant, idiomatic, safe, and maintainable, following the strict architectural patterns provided. The logical output must remain the same, but the implementation must be replaced with production-grade Rust.
+
+---
+### ORIGINAL SPECIFICATION ###
+---
+
+Target Language: {{ spec.language }}
+Project Type: {{ spec.project_type }}
+Project Description: {{ spec.description }}
+
+---
+### GENERATED CODE TO REVIEW ###
+---
+
+```rust
+{{ initial_code }}
+```
+REFACTORING INSTRUCTIONS
+
+Analyze the GENERATED CODE TO REVIEW. Identify all violations of the NON-NEGOTIABLE REQUIREMENTS and common Rust anti-patterns.
+
+Create a Refactoring Plan: Before writing any code, add a comment block in the src/main.rs or src/lib.rs file outlining your plan. Specifically mention which anti-patterns you identified and how your new implementation will fix them. For example:
+
+Rust
+// REFACTORING PLAN
+// 1. Identified multiple uses of `.unwrap()`, which can cause panics. These will be replaced with proper error handling using the `anyhow` crate and the `?` operator.
+// 2. The original code used manual argument parsing. This will be refactored to use the `clap` crate with the derive macro for robust and idiomatic CLI parsing.
+// 3. The error handling was inconsistent. The new implementation will use a unified `anyhow::Result<()>` return type from `main` for clean error propagation.
+// 4. Logic was monolithic in `main.rs`. I will extract the core business logic into a separate `lib.rs` to make it a reusable library and improve testability.
+Rewrite the Code: Based on your plan, rewrite the files from scratch to be production-ready.
+
+RUST-SPECIFIC REVIEW FOCUS
+
+Error Handling: Replace all uses of .unwrap() and .expect() with Result and the ? operator. Use anyhow for application-level errors.
+
+CLI Parsing: Ensure clap is used correctly with the derive feature for a clean, declarative argument structure.
+
+Idiomatic Code: Use iterators and functional patterns over manual loops where appropriate. Follow standard Rust formatting (rustfmt).
+
+Safety and Performance: Check for unnecessary allocations, cloning, or inefficient algorithms. Ensure proper ownership and borrowing.
+
+Modularity: Separate library logic from the binary entry point (src/lib.rs vs src/main.rs).
+
+Final Instruction: Begin your response immediately with ### FILE:.... Do not include any conversational preamble, summary, or explanation. Your entire response must be only the generated code files. Adhere strictly to this format.

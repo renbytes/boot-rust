@@ -1,0 +1,21 @@
+### FILE: templates/rust/Makefile.template
+.PHONY: help build run test clean
+
+help:
+	@echo "Available commands:"
+	@echo "  build   - Build the project in release mode"
+	@echo "  run     - Run the project"
+	@echo "  test    - Run tests"
+	@echo "  clean   - Clean the project"
+
+build:
+	cargo build --release
+
+run:
+	cargo run
+
+test:
+	cargo test
+
+clean:
+	cargo clean
