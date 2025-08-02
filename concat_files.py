@@ -25,6 +25,7 @@ DEFAULT_IGNORE_DIRS = [
     ".pytest_cache",
     ".mypy_cache",
     "poetry.lock",
+    "target",
 ]
 
 # List of specific files to always ignore.

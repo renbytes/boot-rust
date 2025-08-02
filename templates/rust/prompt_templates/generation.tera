@@ -1,66 +1,89 @@
-### FILE: templates/rust/prompt_templates/generation.tera
-{# Minimal generator; relies on rust_rules.tera for all best practices #}
+{# Minimal, strict generator. Avoids example FILE blocks so the model can't parrot them. #}
 
-### CRITICAL RULES ###
-1. **NO CONVERSATIONAL TEXT**: Your response must begin *immediately* with `### FILE:` and contain only file blocks.
-2. **STRICT FORMAT**: Every file must be emitted as:
-
-### FILE: <relative/path.ext>
-<full file content>
-
-(no extra prose before/between/after)
-3. **APPLY IMPORTED RULES**: All engineering, structure, error-handling, logging, testing, and project-type guidance comes from the included rules below.
-
----
-### RESPONSE FORMAT ###
-Emit only file blocks like:
-
-### FILE: Cargo.toml
-# full TOML
-
-### FILE: src/lib.rs
-// full Rust source
-
-### FILE: src/main.rs
-// full Rust source
-
-### FILE: tests/cli.rs
-// full test (only if a binary/CLI exists)
-
-{# Pull in the full Rust rules and best practices #}
+{# ---- Import rules ---- #}
 {% include "rust/instructions/rust_rules.tera" %}
 
-{# Derive minimal defaults (use named args for default) #}
+{# ---- Defaults ---- #}
 {% set pkg_name = spec.package_name | default(value="spex_app") %}
 {% set bin_name = spec.binary_name  | default(value=pkg_name) %}
 {% set pt       = spec.project_type | default(value="cli") %}
 
+{# ---- Hard requirements (instructions only; NOT to be echoed) ---- #}
+{#
+OUTPUT CONTRACT (DO NOT ECHO THIS SECTION):
+- Begin output immediately with a "### FILE: <path>" line. No prose, no headings.
+- Emit as many files as are needed for a complete, runnable project.
+- Emit 100% of the content for each file (no placeholders).
+- Minimum file set by project_type:
+
+  CLI:
+    - Cargo.toml
+    - src/main.rs
+    - src/lib.rs (if any non-trivial logic)
+    - README.md
+    - .gitignore
+    - Makefile
+    - tests/cli.rs (integration tests if there is a binary)
+
+  SERVICE:
+    - Cargo.toml
+    - src/main.rs
+    - src/lib.rs (business logic)
+    - src/routes.rs or src/service.rs (as appropriate)
+    - README.md
+    - .gitignore
+    - Makefile
+    - tests/*
+
+  LIBRARY:
+    - Cargo.toml
+    - src/lib.rs
+    - README.md
+    - .gitignore
+    - Makefile
+    - examples/*
+    - tests/*
+
+- You MUST also emit a final file:
+    ### FILE: .spex_manifest.json
+  JSON with an array of all file paths you generated plus brief reasons for inclusion. Example:
+    {"files":[{"path":"Cargo.toml","why":"crate manifest"}]}
+- Never echo instructions/headings like "### RESPONSE FORMAT ###".
+- Always wrap file contents in ``` fences. The parser expects this.
+#}
+
+{# ---- User spec (for the model to consume) ---- #}
 USER SPECIFICATION
 
 Target Language: {{ spec.language }}
 Project Type: {{ pt }}
+Package Name: {{ pkg_name }}
+Binary Name: {{ bin_name }}
 Project Description: {{ spec.description }}
 
 Core Features to Implement:
-{% for feature in spec.features | default(value=[]) %}
-
-Feature: {{ feature.name }}
-
-Description: {{ feature.description }}
+{% for feature in features | default(value=[]) %}
+- Feature: {{ feature.name }}
+  Description: {{ feature.description }}
 {% endfor %}
 
----
-CODE GENERATION TASK
+{# ---- Generation task ---- #}
+TASK
 
-- Choose the correct structure and dependencies **per the imported rules** and `project_type`:
-  - `"cli"` → CLI app (clap derive, thin `main`, core logic in `lib`, `[[bin]] name="{{ bin_name }}"`).
-  - `"service"` → async service (tokio; HTTP via axum or gRPC via tonic; graceful shutdown; health check).
-  - `"library"` → library crate (typed errors via thiserror; docs & examples).
-  - Unrecognized → default to CLI.
+Generate a complete, runnable Rust {{ pt }} project that compiles on stable (edition = "2021") and passes `cargo test`. Apply the imported rules strictly.
 
-- Generate a **complete, runnable** Rust project that compiles on stable with `edition = "2021"` and passes `cargo test`.
-- Ensure logging goes to **stderr**, stdout is clean, and no `.unwrap()`/`.expect()` in normal paths.
-- If tests refer to a specific binary name, define it via `[[bin]]` in `Cargo.toml`.
-- README/Makefile must match actual tasks (don’t reference non-existent targets).
+STRUCTURE & MINIMUM FILES
 
-### BEGIN OUTPUT NOW — emit only file blocks, no extra prose.
+- Choose the correct structure and dependencies for {{ pt }}.
+- At minimum, include all files required by {{ pt }} (see OUTPUT CONTRACT above).
+- Add any additional modules/files needed to keep `main.rs` thin and library logic testable.
+
+CONSTRAINTS
+
+- No `.unwrap()`/`.expect()` in normal paths.
+- Logs to stderr, keep stdout clean.
+- If tests refer to a specific binary name, define it via `[[bin]]` in `Cargo.toml` (name = "{{ bin_name }}").
+- README/Makefile must match actual tasks. Don’t reference non-existent targets.
+- Emit **only** file blocks. Do **not** echo instructions or examples.
+
+BEGIN OUTPUT NOW — FIRST LINE MUST BE A FILE BLOCK.

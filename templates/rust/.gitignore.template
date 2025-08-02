@@ -1,0 +1,73 @@
+# ------------------------------
+# Rust / Cargo
+# ------------------------------
+/target/
+target/
+**/*.rs.bk
+
+# Keep Cargo.lock for binaries/apps (recommended).
+# If you convert this repo to a library crate and want to ignore Cargo.lock, uncomment:
+# Cargo.lock
+
+# Profiling & coverage (e.g., cargo-llvm-cov)
+*.profraw
+*.profdata
+/target/llvm-cov/
+coverage/
+
+# ------------------------------
+# Plugin / local logs
+# ------------------------------
+*.log
+spex_debug.log
+
+# ------------------------------
+# Environment files
+# ------------------------------
+.env
+.env.*
+!.env.example
+
+# ------------------------------
+# Editors & IDEs
+# ------------------------------
+# VS Code
+.vscode/
+# JetBrains (CLion/IntelliJ/Fleet)
+.idea/
+*.iml
+.fleet/
+
+# ------------------------------
+# OS junk
+# ------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+
+# ------------------------------
+# Python (if you keep small helper scripts around)
+# ------------------------------
+/.venv/
+__pycache__/
+*.pyc
+
+# ------------------------------
+# Archives / dumps
+# ------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.bz2
+*.xz
+
+# ------------------------------
+# Misc
+# ------------------------------
+*~
+*.swp
+*.swo
