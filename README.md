@@ -4,8 +4,8 @@ A "Prompt Provider" plugin for **Spex**.
 
 This Rust application is a lightweight gRPC server that serves language-specific prompt components to `spex-core`. Its sole responsibility is to provide the building blocks that the core application uses to construct high-quality prompts for generating Rust code.
 
-- [cite_start]**Handshake (stdout)**: Prints a single handshake line required by `spex-core` to establish a connection. [cite: 4, 5, 6, 11]
-- [cite_start]**Logs (stderr)**: All logging is directed to stderr to keep stdout clean. [cite: 7, 51]
+- **Handshake (stdout)**: Prints a single handshake line required by `spex-core` to establish a connection.
+- **Logs (stderr)**: All logging is directed to stderr to keep stdout clean.
 - **Prompts**: All prompt logic is contained in simple text files within the `/prompts` directory.
 
 ---

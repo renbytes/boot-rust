@@ -8,7 +8,7 @@ This guide provides technical details for developing and troubleshooting the `sp
 
 `spex-core` discovers and communicates with plugins based on a simple contract:
 
-- **First line on `stdout`**: Must be the handshake string in the format `1|1|tcp|HOST:PORT|grpc`. [cite: 5, 15]
+- **First line on `stdout`**: Must be the handshake string in the format `1|1|tcp|HOST:PORT|grpc`.
 - **All other output**: All logs, warnings, and errors **must** be sent to `stderr`. This keeps `stdout` clean so the handshake is not corrupted.
 
 ---
