@@ -1,135 +1,40 @@
 # spex-rust
 
-Rust plugin for **Spex**. It launches a local `gRPC` server, prints a single handshake line to **stdout**, and renders Rust project files from Tera templates.
+A "Prompt Provider" plugin for **Spex**.
 
-- Handshake (stdout): `1|1|tcp|127.0.0.1:<PORT>|grpc`
-- Logs (stderr): structured with `tracing` (no logs to stdout)
+This Rust application is a lightweight gRPC server that serves language-specific prompt components to `spex-core`. Its sole responsibility is to provide the building blocks that the core application uses to construct high-quality prompts for generating Rust code.
+
+- [cite_start]**Handshake (stdout)**: Prints a single handshake line required by `spex-core` to establish a connection. [cite: 4, 5, 6, 11]
+- [cite_start]**Logs (stderr)**: All logging is directed to stderr to keep stdout clean. [cite: 7, 51]
+- **Prompts**: All prompt logic is contained in simple text files within the `/prompts` directory.
 
 ---
 
-## Prereqs
+## Build & Install
 
-- Rust stable (edition 2021)
+**Prerequisites:**
+- Rust (2021 edition or later)
 - `cargo`
-- (Optional) Python + Poetry (to run `spex-core` locally)
 
----
-
-## Build
-
+**Build the Release Binary:**
 ```bash
-# debug
-cargo build
-
-# release
 cargo build --release
 ```
 
---- 
+### Install for `spex-core`:
 
-## Fast test of the binary:
+To make the `spex-rust` executable discoverable by `spex-core`, install it to your cargo binary path.
 
 ```bash
-# add local release to PATH for this shell
-export PATH="$(pwd)/target/release:$PATH"
-
-# the first stdout line should be the handshake (logs go to stderr)
-spex-rust 2>/dev/null | head -1
-# expected: 1|1|tcp|127.0.0.1:<PORT>|grpc
-```
-> If you see a “Broken pipe” after head -1: that’s an old build that logs to stdout. Rebuild; the current code logs to stderr only.
-
----
-
-## Install (so spex-core can find it)
-
-Two options—use one:
-
-### A) Install to `~/.cargo/bin` (recommended)
-```bash
+# Install the binary
 cargo install --path . --force
-# verify
-which -a spex-rust
+
+# Verify it's in your path
+which spex-rust
 ```
 
-### B) Don’t install; just export PATH when running core
-```bash
-# from spex-core
-poetry run env PATH="/abs/path/to/spex-rust/target/release:$PATH" \
-  spex generate my_rust_spec.toml
+Expected output:
 ```
-
----
-
-## Debugging: PATH & Plugin Discovery
-
-Core discovers the plugin by name spex-rust on its PATH.
-
-Check what Poetry sees:
-```bash
-# from spex-core dir
-poetry run which -a spex-rust
+spex-rust % which spex-rust
+/Users/your_user_name/.cargo/bin/spex-rust
 ```
-If that shows `~/.cargo/bin/spex-rust` but you want your local build, either:
-    •   Install your latest (`cargo install --path . --force`), or
-    •   Override PATH for that run (see option B above).
-
-Test the binary from Poetry’s env:
-```bash
-poetry run bash -lc 'spex-rust 2>/dev/null | head -1'
-# expect: 1|1|tcp|127.0.0.1:<PORT>|grpc
-```
-Remove stale binary if needed:
-```bash
-cargo uninstall spex-rust           # if installed by cargo
-rm -f ~/.cargo/bin/spex-rust        # if it was just a stray file
-hash -r
-```
-
----
-
-Template Gotchas (Tera)
-- Default filter requires a named arg:
-```
-{% set pkg_name = spec.package_name | default(value="spex_app") %}
-```
-
-- Escaping examples that contain {{ ... }}:
-```
-{% raw %}Command::cargo_bin("{{ spec.binary_name | default(value="app") }}"){% endraw %}
-```
-
----
-
-## LLM Response Parsing (Rust client)
-
-When parsing provider responses, index arrays correctly:
-```rust
-// OpenAI chat
-data["choices"][0]["message"]["content"].as_str()
-
-// Gemini
-data["candidates"][0]["content"]["parts"][0]["text"].as_str()
-```
-
-Avoid `Result<_, String>` in the library layer; prefer `anyhow::Result` (apps) or typed errors with thiserror (libs). This keeps `.context("...")` usable at call sites.
-
-⸻
-
-Development Tips
-
-# format & lint
-cargo fmt --all
-cargo clippy --all-targets -- -D warnings
-
-# run unit tests (if any)
-cargo test
-
-Handshake contract:
-- First line on stdout: `1|1|tcp|HOST:PORT|grpc`
-- Everything else (info, warnings, errors) → `stderr`
-
-If spex-core errors with:
-- Plugin executable not found: `spex-rust` → `PATH` issue (see "Install/Using with spex-core").
-- not enough values to unpack / invalid handshake → wrong binary or stdout noise before handshake (verify with head -1 test).
-- Tera expected an identifier → use `default(value="...")` or escape example `{{ ... }} with {% raw %}`.

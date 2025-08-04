@@ -1,0 +1,568 @@
+
+--- START OF FILE: .gitignore ---
+# ------------------------------
+# Rust / Cargo
+# ------------------------------
+/target/
+target/
+**/*.rs.bk
+
+# Keep Cargo.lock for binaries/apps (recommended).
+# If you convert this repo to a library crate and want to ignore Cargo.lock, uncomment:
+# Cargo.lock
+
+# Profiling & coverage (e.g., cargo-llvm-cov)
+*.profraw
+*.profdata
+/target/llvm-cov/
+coverage/
+
+# ------------------------------
+# Plugin / local logs
+# ------------------------------
+*.log
+spex_debug.log
+
+# ------------------------------
+# Environment files
+# ------------------------------
+.env
+.env.*
+!.env.example
+
+# ------------------------------
+# Editors & IDEs
+# ------------------------------
+# VS Code
+.vscode/
+# JetBrains (CLion/IntelliJ/Fleet)
+.idea/
+*.iml
+.fleet/
+
+# ------------------------------
+# OS junk
+# ------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+
+# ------------------------------
+# Python (if you keep small helper scripts around)
+# ------------------------------
+/.venv/
+__pycache__/
+*.pyc
+
+# ------------------------------
+# Archives / dumps
+# ------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+*.bz2
+*.xz
+
+# ------------------------------
+# Misc
+# ------------------------------
+*~
+*.swp
+*.swo
+--- END OF FILE: .gitignore ---
+
+
+--- START OF FILE: Cargo.toml ---
+### FILE: Cargo.toml
+[package]
+name = "spex-rust"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "spex-rust"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-stream = { version = "0.1.17", features = ["net"] }
+
+# gRPC and Protobuf
+tonic = "0.11"
+prost = "0.12"
+
+# Serialization/Deserialization for spec.toml
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# Error Handling
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[build-dependencies]
+tonic-build = "0.11"
+
+--- END OF FILE: Cargo.toml ---
+
+
+--- START OF FILE: DEVELOPER_GUIDE.md ---
+# Spex-Rust Developer Guide
+
+This guide provides technical details for developing and troubleshooting the `spex-rust` plugin.
+
+---
+
+## The Handshake Contract
+
+`spex-core` discovers and communicates with plugins based on a simple contract:
+
+- **First line on `stdout`**: Must be the handshake string in the format `1|1|tcp|HOST:PORT|grpc`. [cite: 5, 15]
+- **All other output**: All logs, warnings, and errors **must** be sent to `stderr`. This keeps `stdout` clean so the handshake is not corrupted.
+
+---
+
+## Testing the Binary
+
+You can quickly test that the binary is producing the correct handshake and that logs are properly sent to `stderr`.
+
+```bash
+# From the spex-rust project root, run the release binary and grab the first line of stdout
+./target/release/spex-rust 2>/dev/null | head -1
+```
+
+**Expected Output:**
+
+```
+1|1|tcp|127.0.0.1:<PORT>|grpc
+```
+
+**Note**: If you see a "Broken pipe" error, it's often because a previous version of the binary was logging to stdout. Rebuild with `cargo build --release` to ensure logs are correctly sent to stderr.
+
+---
+
+## Debugging Plugin Discovery
+
+`spex-core` discovers the plugin by finding an executable named `spex-rust` on its `PATH`.
+
+### Verify what `spex-core` Sees
+
+From the `spex-core` directory, run this command to see which `spex-rust` executable Poetry's environment will use:
+
+```bash
+poetry run which -a spex-rust
+```
+
+### Alternative: Running Without Installing
+
+For rapid testing, you can run `spex-core` and temporarily add your local plugin build to the `PATH` for that single command:
+
+```bash
+# Run this from the spex-core directory
+poetry run env PATH="/path/to/your/spex-rust/target/release:$PATH" \
+  spex generate my_rust_spec.toml
+```
+
+### Removing Stale Binaries
+
+If `which spex-rust` points to an old version, remove it:
+
+```bash
+# If installed via cargo
+cargo uninstall spex-rust
+
+# Or remove a manually copied file
+rm -f ~/.cargo/bin/spex-rust
+
+# Clear the shell's command cache
+hash -r
+```
+
+---
+
+## Development Workflow
+
+- **Format Code:** `cargo fmt --all`
+- **Lint Code:** `cargo clippy --all-targets -- -D warnings`
+- **Run Unit Tests:** `cargo test`
+
+---
+
+## Common `spex-core` Errors
+
+- **`Plugin executable not found`**: This is a `PATH` issue. `spex-core` cannot find the `spex-rust` binary. Ensure you have run `cargo install --path . --force` and that `~/.cargo/bin` is in your shell's `PATH`.
+
+- **`Invalid handshake` / `not enough values to unpack`**: This means the plugin wrote something to `stdout` before the handshake string. Use the "Testing the Binary" command above to verify the output is clean.
+
+--- END OF FILE: DEVELOPER_GUIDE.md ---
+
+
+--- START OF FILE: README.md ---
+# spex-rust
+
+A "Prompt Provider" plugin for **Spex**.
+
+This Rust application is a lightweight gRPC server that serves language-specific prompt components to `spex-core`. Its sole responsibility is to provide the building blocks that the core application uses to construct high-quality prompts for generating Rust code.
+
+- [cite_start]**Handshake (stdout)**: Prints a single handshake line required by `spex-core` to establish a connection. [cite: 4, 5, 6, 11]
+- [cite_start]**Logs (stderr)**: All logging is directed to stderr to keep stdout clean. [cite: 7, 51]
+- **Prompts**: All prompt logic is contained in simple text files within the `/prompts` directory.
+
+---
+
+## Build & Install
+
+**Prerequisites:**
+- Rust (2021 edition or later)
+- `cargo`
+
+**Build the Release Binary:**
+```bash
+cargo build --release
+```
+
+### Install for `spex-core`:
+
+To make the `spex-rust` executable discoverable by `spex-core`, install it to your cargo binary path.
+
+```bash
+# Install the binary
+cargo install --path . --force
+
+# Verify it's in your path
+which spex-rust
+```
+
+Expected output:
+```
+spex-rust % which spex-rust
+/Users/your_user_name/.cargo/bin/spex-rust
+```
+
+--- END OF FILE: README.md ---
+
+
+--- START OF FILE: build.rs ---
+// FILE: build.rs
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tonic_build::compile_protos("proto/plugin.proto")?;
+    Ok(())
+}
+--- END OF FILE: build.rs ---
+
+
+--- START OF FILE: create ---
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Root directory for the new project
+ROOT="spex-rust"
+
+# Create directories
+mkdir -p "$ROOT"/proto
+mkdir -p "$ROOT"/src
+mkdir -p "$ROOT"/templates/rust/instructions
+mkdir -p "$ROOT"/templates/rust/patterns
+mkdir -p "$ROOT"/templates/rust/prompt_templates
+mkdir -p "$ROOT"/templates/shared
+
+# Create top-level files
+touch "$ROOT"/Cargo.toml
+touch "$ROOT"/README.md
+touch "$ROOT"/build.rs
+
+# Create proto files
+touch "$ROOT"/proto/plugin.proto
+
+# Create source files
+touch "$ROOT"/src/main.rs
+touch "$ROOT"/src/server.rs
+touch "$ROOT"/src/llm_client.rs
+touch "$ROOT"/src/prompt_builder.rs
+touch "$ROOT"/src/project_builder.rs
+touch "$ROOT"/src/spec.rs
+
+# Create template files
+touch "$ROOT"/templates/rust/Cargo.toml.template
+touch "$ROOT"/templates/rust/Makefile.template
+touch "$ROOT"/templates/rust/main.rs.template
+touch "$ROOT"/templates/rust/instructions/rust_rules.tera
+touch "$ROOT"/templates/rust/patterns/cli_patterns.tera
+touch "$ROOT"/templates/rust/prompt_templates/generation.tera
+touch "$ROOT"/templates/rust/prompt_templates/review.tera
+touch "$ROOT"/templates/shared/README.md.template
+touch "$ROOT"/templates/shared/gitignore.template
+
+echo "✅ spex-rust skeleton created successfully."
+--- END OF FILE: create ---
+
+
+--- START OF FILE: prompts/Dockerfile ---
+# Stage 1: Build the application using a modern, stable Rust toolchain.
+# Using a specific recent version is more reproducible than `latest`.
+FROM rust:1.78 as builder
+
+WORKDIR /usr/src/app
+COPY . .
+
+# This step caches dependencies to speed up subsequent builds.
+RUN cargo fetch
+
+# Build the release binary.
+RUN cargo build --release
+
+# Stage 2: Create a minimal final image for a small footprint and better security.
+FROM debian:bookworm-slim
+
+# Copy the compiled binary from the builder stage.
+# The binary name should ideally come from the spec, but we'll use a common default.
+COPY --from=builder /usr/src/app/target/release/spex-accounts /usr/local/bin/spex-accounts
+
+# Set the binary as the entrypoint.
+CMD ["spex-accounts"]
+
+--- END OF FILE: prompts/Dockerfile ---
+
+
+--- START OF FILE: prompts/Makefile ---
+# Default target for spex-core's build pass
+build:
+	@echo "--- Building Rust Project ---"
+	@cargo build --release
+
+# A target for running tests
+test:
+	@echo "--- Testing Rust Project ---"
+	@cargo test --release
+--- END OF FILE: prompts/Makefile ---
+
+
+--- START OF FILE: prompts/base_instructions.txt ---
+You are an expert-level Rust code generator specializing in production-grade web services.
+Your sole task is to write a complete, robust, and idiomatic Rust application based on the user's specifications.
+
+CRITICAL RULES:
+- You MUST NOT write any conversational text, explanations, or apologies.
+- You MUST generate a complete and runnable implementation for every file requested.
+- You MUST format the entire response as a series of markdown code blocks, each preceded by a `### FILE: <path>` marker.
+- All code should be production-ready, demonstrating best practices for Rust, including comprehensive error handling (using `anyhow` and `thiserror`), type safety, and clear module organization.
+--- END OF FILE: prompts/base_instructions.txt ---
+
+
+--- START OF FILE: prompts/language_rules.txt ---
+### RUST-SPECIFIC RULES ###
+- Use `async-trait` for asynchronous traits in services.
+- For any web service, you MUST include `serde` with the "derive" feature in `Cargo.toml`.
+- Leverage `axum` for the web framework, using extractors for state, JSON, and path parameters.
+- Any struct used as a JSON payload or API response MUST have `#[derive(Serialize, Deserialize)]` added. Failure to do so will cause a cascade of build failures.
+- Employ `sqlx` for asynchronous database interaction, using the query macro for compile-time query checking.
+- Use `tracing` for structured logging.
+- All error types should implement `std::error::Error`. `thiserror` is preferred for library-like error enums.
+- Ensure graceful shutdown is handled for all long-lived tasks and the web server.
+- The `Cargo.toml` should be complete and include feature flags for different database backends (e.g., `db-postgres`, `db-sqlite`).
+
+--- END OF FILE: prompts/language_rules.txt ---
+
+
+--- START OF FILE: prompts/review_instructions.txt ---
+You are a Principal Software Engineer and a Rust expert, assigned to review and refactor code written by a junior developer.
+Your task is to analyze the `GENERATED CODE TO REVIEW` section below. While the code might be functionally correct, it likely lacks production-quality standards.
+Rewrite the entire codebase to be highly performant, scalable, idiomatic, and maintainable, following all Rust best practices.
+
+The original specification is provided for context. The final output must adhere to this specification.
+
+ORIGINAL SPECIFICATION:
+- Language: {language}
+- Description: {description}
+
+GENERATED CODE TO REVIEW:
+{initial_code}
+--- END OF FILE: prompts/review_instructions.txt ---
+
+
+--- START OF FILE: proto/plugin.proto ---
+// proto/plugin.proto
+syntax = "proto3";
+package plugin;
+
+service SpexPlugin {
+  rpc GetPromptComponents(GetPromptComponentsRequest) returns (GetPromptComponentsResponse) {}
+}
+
+message GetPromptComponentsRequest {
+  string spec_toml_content = 1;
+}
+
+message GetPromptComponentsResponse {
+  // A map to hold all prompt files, keyed by their filename.
+  map<string, string> components = 1;
+  // The user-specific prompt is kept separate as it's generated from the request.
+  string user_spec_prompt = 2;
+}
+--- END OF FILE: proto/plugin.proto ---
+
+
+--- START OF FILE: src/main.rs ---
+use std::net::SocketAddr;
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::transport::Server;
+
+// Only the server module is needed now.
+mod server;
+
+use server::MySpexPlugin as RustPlugin;
+
+// Import the auto-generated gRPC types.
+pub mod spex_plugin {
+    tonic::include_proto!("plugin");
+}
+use spex_plugin::spex_plugin_server::SpexPluginServer;
+
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        eprintln!("panic: {info}");
+        if let Some(loc) = info.location() {
+            eprintln!("at: {}:{}", loc.file(), loc.line());
+        }
+    }));
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Keep stdout clean for the handshake required by spex-core.
+    tracing_subscriber::fmt().with_writer(std::io::stderr).init();
+    install_panic_hook();
+
+    // Bind to an ephemeral port on the loopback address.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let addr: SocketAddr = listener.local_addr()?;
+
+    // Print the handshake line to stdout.
+    println!("1|1|tcp|{}:{}|grpc", addr.ip(), addr.port());
+
+    // The server struct from `src/server.rs` no longer needs arguments.
+    let plugin_service = RustPlugin::default();
+    let server = SpexPluginServer::new(plugin_service);
+
+    Server::builder()
+        .add_service(server)
+        .serve_with_incoming(TcpListenerStream::new(listener))
+        .await?;
+
+    Ok(())
+}
+--- END OF FILE: src/main.rs ---
+
+
+--- START OF FILE: src/server.rs ---
+// spex-rust/src/server.rs
+
+use anyhow::{anyhow, Result};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use toml::Value;
+use tonic::{Request, Response, Status};
+
+use crate::spex_plugin::{
+    spex_plugin_server::SpexPlugin, GetPromptComponentsRequest, GetPromptComponentsResponse,
+};
+
+#[derive(Debug, Default)]
+pub struct MySpexPlugin {}
+
+/**
+ * Gets the absolute path to the 'prompts' directory for local development.
+ *
+ * This function assumes a sibling-directory layout (`spex-core/` and `spex-rust/`)
+ * and constructs the path from the current working directory.
+ *
+ * @returns The absolute path to the `spex-rust/prompts` directory.
+ */
+fn get_prompts_path() -> Result<PathBuf> {
+    // Get the current working directory from where `spex` was run (e.g., /path/to/spex-core)
+    let current_dir = env::current_dir()?;
+
+    // Go up one level to the parent workspace directory
+    let workspace_dir = current_dir
+        .parent()
+        .ok_or_else(|| anyhow!("Failed to get parent directory of {:?}", current_dir))?;
+
+    // Construct the path to the sibling `spex-rust/prompts` directory
+    let prompts_path = workspace_dir.join("spex-rust").join("prompts");
+
+    if !prompts_path.is_dir() {
+        return Err(anyhow!(
+            "Could not find 'prompts' directory at expected dev path: {}. Ensure spex-rust is a sibling to spex-core.",
+            prompts_path.display()
+        ));
+    }
+    Ok(prompts_path)
+}
+
+// format_spec_for_prompt function remains the same...
+fn format_spec_for_prompt(spec_toml_content: &str) -> Result<String> {
+    let spec: Value = toml::from_str(spec_toml_content)?;
+    let description = spec
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("No description provided.");
+    let project_name = spec
+        .get("project")
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Unnamed project");
+    Ok(format!(
+        "--- USER SPECIFICATION ---\nProject Name: {}\nDescription: {}",
+        project_name, description
+    ))
+}
+
+
+#[tonic::async_trait]
+impl SpexPlugin for MySpexPlugin {
+    async fn get_prompt_components(
+        &self,
+        request: Request<GetPromptComponentsRequest>,
+    ) -> Result<Response<GetPromptComponentsResponse>, Status> {
+        let spec_content = &request.get_ref().spec_toml_content;
+
+        let mut components = HashMap::new();
+        let prompts_dir =
+            get_prompts_path().map_err(|e| Status::internal(e.to_string()))?;
+        let entries = fs::read_dir(&prompts_dir)
+            .map_err(|e| Status::internal(format!("Could not read prompts directory: {}", e)))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| Status::internal(format!("Invalid directory entry: {}", e)))?;
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if file_name == "Dockerfile" {
+                        continue;
+                    }
+                    let content = fs::read_to_string(&path)
+                        .map_err(|e| Status::internal(format!("Could not read file {:?}: {}", path, e)))?;
+                    components.insert(file_name.to_string(), content);
+                }
+            }
+        }
+
+        let response = GetPromptComponentsResponse {
+            components,
+            user_spec_prompt: format_spec_for_prompt(spec_content)
+                .map_err(|e| Status::internal(e.to_string()))?,
+        };
+
+        Ok(Response::new(response))
+    }
+}
+--- END OF FILE: src/server.rs ---

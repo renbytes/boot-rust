@@ -1,0 +1,10 @@
+### RUST-SPECIFIC RULES ###
+- Use `async-trait` for asynchronous traits in services.
+- For any web service, you MUST include `serde` with the "derive" feature in `Cargo.toml`.
+- Leverage `axum` for the web framework, using extractors for state, JSON, and path parameters.
+- Any struct used as a JSON payload or API response MUST have `#[derive(Serialize, Deserialize)]` added. Failure to do so will cause a cascade of build failures.
+- Employ `sqlx` for asynchronous database interaction, using the query macro for compile-time query checking.
+- Use `tracing` for structured logging.
+- All error types should implement `std::error::Error`. `thiserror` is preferred for library-like error enums.
+- Ensure graceful shutdown is handled for all long-lived tasks and the web server.
+- The `Cargo.toml` should be complete and include feature flags for different database backends (e.g., `db-postgres`, `db-sqlite`).

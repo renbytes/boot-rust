@@ -2,14 +2,12 @@ use std::net::SocketAddr;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 
-mod llm_client;
-mod project_builder;
-mod prompt_builder;
+// Only the server module is needed now.
 mod server;
-mod spec;
 
-use server::RustPluginServicer;
+use server::MySpexPlugin as RustPlugin;
 
+// Import the auto-generated gRPC types.
 pub mod spex_plugin {
     tonic::include_proto!("plugin");
 }
@@ -26,19 +24,19 @@ fn install_panic_hook() {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // stderr logging; keep stdout clean for handshake
+    // Keep stdout clean for the handshake required by spex-core.
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     install_panic_hook();
 
-    // Bind to an ephemeral port on loopback
+    // Bind to an ephemeral port on the loopback address.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr: SocketAddr = listener.local_addr()?;
 
-    // Handshake to stdout (required by spex-core)
+    // Print the handshake line to stdout.
     println!("1|1|tcp|{}:{}|grpc", addr.ip(), addr.port());
 
-    // Build and run gRPC server
-    let plugin_service = RustPluginServicer::new()?;
+    // The server struct from `src/server.rs` no longer needs arguments.
+    let plugin_service = RustPlugin::default();
     let server = SpexPluginServer::new(plugin_service);
 
     Server::builder()
