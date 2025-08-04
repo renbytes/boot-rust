@@ -1,139 +1,103 @@
-use crate::{llm_client::LlmClient, project_builder, prompt_builder, spec::SpexSpecification};
-use futures::FutureExt;
-use serde_json::json;
-use std::backtrace::Backtrace;
-use std::collections::HashSet;
-use tera::Tera;
+// spex-rust/src/server.rs
+
+use anyhow::{anyhow, Result};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use toml::Value;
 use tonic::{Request, Response, Status};
-use tracing::{error, info};
 
-use crate::spex_plugin::{spex_plugin_server::SpexPlugin, GenerateRequest, GenerateResponse};
+use crate::spex_plugin::{
+    spex_plugin_server::SpexPlugin, GetPromptComponentsRequest, GetPromptComponentsResponse,
+};
 
-pub struct RustPluginServicer {
-    tera: Tera,
+#[derive(Debug, Default)]
+pub struct MySpexPlugin {}
+
+/**
+ * Gets the absolute path to the 'prompts' directory for local development.
+ *
+ * This function assumes a sibling-directory layout (`spex-core/` and `spex-rust/`)
+ * and constructs the path from the current working directory.
+ *
+ * @returns The absolute path to the `spex-rust/prompts` directory.
+ */
+fn get_prompts_path() -> Result<PathBuf> {
+    // Get the current working directory from where `spex` was run (e.g., /path/to/spex-core)
+    let current_dir = env::current_dir()?;
+
+    // Go up one level to the parent workspace directory
+    let workspace_dir = current_dir
+        .parent()
+        .ok_or_else(|| anyhow!("Failed to get parent directory of {:?}", current_dir))?;
+
+    // Construct the path to the sibling `spex-rust/prompts` directory
+    let prompts_path = workspace_dir.join("spex-rust").join("prompts");
+
+    if !prompts_path.is_dir() {
+        return Err(anyhow!(
+            "Could not find 'prompts' directory at expected dev path: {}. Ensure spex-rust is a sibling to spex-core.",
+            prompts_path.display()
+        ));
+    }
+    Ok(prompts_path)
 }
 
-impl RustPluginServicer {
-    pub fn new() -> anyhow::Result<Self> {
-        let pattern = format!("{}/templates/**/*", env!("CARGO_MANIFEST_DIR"));
-        let mut tera = Tera::new(&pattern)?;
-        tera.autoescape_on(vec![]);
-        info!("Tera template environment loaded (pattern: {pattern})");
-
-        // Log what Tera sees (helps diagnose naming mismatches)
-        let names: Vec<_> = tera.get_template_names().collect();
-        info!("Loaded {} templates: {:?}", names.len(), names);
-
-        // Fail fast if core infra templates are missing (we’ll fallback only for .gitignore)
-        ensure_required_templates(&tera)?;
-
-        Ok(Self { tera })
-    }
-
-    async fn handle_generate(&self, req: GenerateRequest) -> Result<GenerateResponse, Status> {
-        info!("Received GenerateProject request.");
-
-        let spec: SpexSpecification = toml::from_str(&req.spec_toml_content).map_err(|e| {
-            error!("Failed to parse spec.toml content: {}", e);
-            Status::invalid_argument(format!("Invalid spec.toml: {}", e))
-        })?;
-
-        let llm_config = req.llm_config.clone().ok_or_else(|| {
-            error!("LLMConfig is missing from the request.");
-            Status::invalid_argument("LLMConfig is required")
-        })?;
-
-        let llm_client = LlmClient::new(llm_config);
-
-        let prompt = prompt_builder::render_prompt(&self.tera, &spec, &req).map_err(|e| {
-            error!("Failed to render generation prompt: {:?}", e);
-            Status::internal(format!("Failed to render prompt: {e:#}"))
-        })?;
-
-        let llm_output = llm_client.generate(&prompt).await.map_err(|e| {
-            error!("LLM generation failed: {:?}", e);
-            Status::internal(format!("LLM generation failed: {e:#}"))
-        })?;
-
-        let mut response = GenerateResponse::default();
-        let code_count = project_builder::package_code_files(&llm_output, &mut response);
-
-        project_builder::package_infrastructure_files(&self.tera, &spec, &mut response).map_err(
-            |e| {
-                error!("Failed to package infrastructure files: {:?}", e);
-                Status::internal(format!("Failed to package infrastructure files: {e:#}"))
-            },
-        )?;
-
-        if code_count == 0 {
-            info!("No code files from LLM; rendering bootstrap skeleton");
-            project_builder::package_bootstrap_files(&self.tera, &spec, &mut response).map_err(
-                |e| {
-                    error!("Failed to package bootstrap files: {:?}", e);
-                    Status::internal(format!("Failed to package bootstrap files: {e:#}"))
-                },
-            )?;
-        }
-
-        // append manifest
-        let manifest = json!({
-            "files": response.files.iter().map(|f| json!({"path": f.path})).collect::<Vec<_>>()
-        }).to_string();
-        response.files.push(crate::spex_plugin::File { path: ".spex_manifest.json".into(), content: manifest });
-
-        Ok(response)
-    }
+// format_spec_for_prompt function remains the same...
+fn format_spec_for_prompt(spec_toml_content: &str) -> Result<String> {
+    let spec: Value = toml::from_str(spec_toml_content)?;
+    let description = spec
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("No description provided.");
+    let project_name = spec
+        .get("project")
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Unnamed project");
+    Ok(format!(
+        "--- USER SPECIFICATION ---\nProject Name: {}\nDescription: {}",
+        project_name, description
+    ))
 }
 
-fn ensure_required_templates(tera: &Tera) -> anyhow::Result<()> {
-    use anyhow::anyhow;
-    let required: &[&str] = &[
-        // we’ll fallback for .gitignore so it’s not required here
-        "rust/Cargo.toml.template",
-        "rust/Makefile.template",
-        "rust/README.md.template",
-        "rust/instructions/rust_rules.tera",
-        "rust/prompt_templates/generation.tera",
-        "rust/prompt_templates/review.tera",
-    ];
-
-    let names: HashSet<_> = tera.get_template_names().collect();
-    let mut missing = Vec::new();
-    for t in required {
-        if !names.contains(*t) {
-            missing.push(*t);
-        }
-    }
-    if !missing.is_empty() {
-        return Err(anyhow!("Missing required templates: {}", missing.join(", ")));
-    }
-    Ok(())
-}
 
 #[tonic::async_trait]
-impl SpexPlugin for RustPluginServicer {
-    async fn generate_project(
+impl SpexPlugin for MySpexPlugin {
+    async fn get_prompt_components(
         &self,
-        request: Request<GenerateRequest>,
-    ) -> Result<Response<GenerateResponse>, Status> {
-        let fut = async { self.handle_generate(request.into_inner()).await };
-        match std::panic::AssertUnwindSafe(fut).catch_unwind().await {
-            Ok(Ok(resp)) => Ok(Response::new(resp)),
-            Ok(Err(status)) => Err(status),
-            Err(panic) => {
-                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                    (*s).to_string()
-                } else if let Some(s) = panic.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "unknown panic payload".to_string()
-                };
-                let bt = Backtrace::force_capture();
-                error!("panic in generate_project: {msg}\nBacktrace:\n{bt}");
-                Err(Status::internal(format!(
-                    "plugin panic in generate_project: {msg}\n{bt}"
-                )))
+        request: Request<GetPromptComponentsRequest>,
+    ) -> Result<Response<GetPromptComponentsResponse>, Status> {
+        let spec_content = &request.get_ref().spec_toml_content;
+
+        let mut components = HashMap::new();
+        let prompts_dir =
+            get_prompts_path().map_err(|e| Status::internal(e.to_string()))?;
+        let entries = fs::read_dir(&prompts_dir)
+            .map_err(|e| Status::internal(format!("Could not read prompts directory: {}", e)))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| Status::internal(format!("Invalid directory entry: {}", e)))?;
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+                    if file_name == "Dockerfile" {
+                        continue;
+                    }
+                    let content = fs::read_to_string(&path)
+                        .map_err(|e| Status::internal(format!("Could not read file {:?}: {}", path, e)))?;
+                    components.insert(file_name.to_string(), content);
+                }
             }
         }
+
+        let response = GetPromptComponentsResponse {
+            components,
+            user_spec_prompt: format_spec_for_prompt(spec_content)
+                .map_err(|e| Status::internal(e.to_string()))?,
+        };
+
+        Ok(Response::new(response))
     }
 }
