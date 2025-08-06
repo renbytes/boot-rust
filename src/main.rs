@@ -5,13 +5,14 @@ use tonic::transport::Server;
 // Only the server module is needed now.
 mod server;
 
-use server::MySpexPlugin as RustPlugin;
+use server::MyBootCodePlugin as RustPlugin;
+
+use crate::boot_plugin::boot_code_plugin_server::BootCodePluginServer;
 
 // Import the auto-generated gRPC types.
-pub mod spex_plugin {
+pub mod boot_plugin {
     tonic::include_proto!("plugin");
 }
-use spex_plugin::spex_plugin_server::SpexPluginServer;
 
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
@@ -24,7 +25,7 @@ fn install_panic_hook() {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Keep stdout clean for the handshake required by spex-core.
+    // Keep stdout clean for the handshake required by boot-core.
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
     install_panic_hook();
 
@@ -37,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The server struct from `src/server.rs` no longer needs arguments.
     let plugin_service = RustPlugin::default();
-    let server = SpexPluginServer::new(plugin_service);
+    let server = BootCodePluginServer::new(plugin_service);
 
     Server::builder()
         .add_service(server)

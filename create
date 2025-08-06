@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Root directory for the new project
-ROOT="spex-rust"
+ROOT="boot-rust"
 
 # Create directories
 mkdir -p "$ROOT"/proto
@@ -39,4 +39,4 @@ touch "$ROOT"/templates/rust/prompt_templates/review.tera
 touch "$ROOT"/templates/shared/README.md.template
 touch "$ROOT"/templates/shared/gitignore.template
 
-echo "✅ spex-rust skeleton created successfully."
+echo "✅ boot-rust skeleton created successfully."

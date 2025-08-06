@@ -1,11 +1,11 @@
 ### FILE: Cargo.toml
 [package]
-name = "spex-rust"
+name = "boot-rust"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "spex-rust"
+name = "boot-rust"
 path = "src/main.rs"
 
 [dependencies]

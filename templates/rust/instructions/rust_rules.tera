@@ -151,7 +151,7 @@ predicates = "3"
 
 {% raw %}
 ```rust
-use spex_vcs::commands; // ✅ not `use crate::commands;` in the bin
+use boot_vcs::commands; // ✅ not `use crate::commands;` in the bin
 ```
 {% endraw %}
 
@@ -233,7 +233,7 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt().with_writer(std::io::stderr).init();
 
     // thin wrapper that calls into lib
-    spex_vcs::run().context("app failed")?;
+    boot_vcs::run().context("app failed")?;
     Ok(())
 }
 ```
