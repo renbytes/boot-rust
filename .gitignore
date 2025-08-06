@@ -19,7 +19,7 @@ coverage/
 # Plugin / local logs
 # ------------------------------
 *.log
-spex_debug.log
+boot_debug.log
 
 # ------------------------------
 # Environment files
