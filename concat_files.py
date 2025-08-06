@@ -115,7 +115,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--output",
-        default="all_code_spex_rust.txt",
+        default="all_code_boot_rust.txt",
         help="The name of the output file.",
     )
 

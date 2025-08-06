@@ -1,5 +1,5 @@
-# FILE: spex-rust/prompts/Makefile
-# Default target for spex-core's build pass
+# FILE: boot-rust/prompts/Makefile
+# Default target for boot-core's build pass
 build:
 	@echo "--- Building Rust Project ---"
 	@cargo build --release

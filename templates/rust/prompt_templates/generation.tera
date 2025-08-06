@@ -4,7 +4,7 @@
 {% include "rust/instructions/rust_rules.tera" %}
 
 {# ---- Defaults ---- #}
-{% set pkg_name = spec.package_name | default(value="spex_app") %}
+{% set pkg_name = spec.package_name | default(value="boot_app") %}
 {% set bin_name = spec.binary_name  | default(value=pkg_name) %}
 {% set pt       = spec.project_type | default(value="cli") %}
 
@@ -45,7 +45,7 @@ OUTPUT CONTRACT (DO NOT ECHO THIS SECTION):
     - tests/*
 
 - You MUST also emit a final file:
-    ### FILE: .spex_manifest.json
+    ### FILE: .boot_manifest.json
   JSON with an array of all file paths you generated plus brief reasons for inclusion. Example:
     {"files":[{"path":"Cargo.toml","why":"crate manifest"}]}
 - Never echo instructions/headings like "### RESPONSE FORMAT ###".

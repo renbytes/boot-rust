@@ -2,7 +2,7 @@
 syntax = "proto3";
 package plugin;
 
-service SpexPlugin {
+service BootCodePlugin {
   rpc GetPromptComponents(GetPromptComponentsRequest) returns (GetPromptComponentsResponse) {}
 }
 

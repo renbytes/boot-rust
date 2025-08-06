@@ -1,10 +1,10 @@
-# spex-rust
+# boot-rust
 
-A "Prompt Provider" plugin for **Spex**.
+A "Prompt Provider" plugin for **BootCode**.
 
-This Rust application is a lightweight gRPC server that serves language-specific prompt components to `spex-core`. Its sole responsibility is to provide the building blocks that the core application uses to construct high-quality prompts for generating Rust code.
+This Rust application is a lightweight gRPC server that serves language-specific prompt components to `boot-core`. Its sole responsibility is to provide the building blocks that the core application uses to construct high-quality prompts for generating Rust code.
 
-- **Handshake (stdout)**: Prints a single handshake line required by `spex-core` to establish a connection.
+- **Handshake (stdout)**: Prints a single handshake line required by `boot-core` to establish a connection.
 - **Logs (stderr)**: All logging is directed to stderr to keep stdout clean.
 - **Prompts**: All prompt logic is contained in simple text files within the `/prompts` directory.
 
@@ -21,20 +21,20 @@ This Rust application is a lightweight gRPC server that serves language-specific
 cargo build --release
 ```
 
-### Install for `spex-core`:
+### Install for `boot-core`:
 
-To make the `spex-rust` executable discoverable by `spex-core`, install it to your cargo binary path.
+To make the `boot-rust` executable discoverable by `boot-core`, install it to your cargo binary path.
 
 ```bash
 # Install the binary
 cargo install --path . --force
 
 # Verify it's in your path
-which spex-rust
+which boot-rust
 ```
 
 Expected output:
 ```
-spex-rust % which spex-rust
-/Users/your_user_name/.cargo/bin/spex-rust
+boot-rust % which boot-rust
+/Users/your_user_name/.cargo/bin/boot-rust
 ```
