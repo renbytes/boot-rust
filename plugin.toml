@@ -1,0 +1,7 @@
+# file: plugin.toml
+
+[plugin]
+name = "boot-rust"
+language = "rust"
+description = "A prompt provider for general Rust projects."
+install_strategy = "binary"
