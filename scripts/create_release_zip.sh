@@ -1,25 +1,33 @@
-#!/bin/bash
+#!/bin/zsh
 #
-# Creates a compressed ZIP archive of the release binary for distribution
-# on GitHub.
+# Creates compressed ZIP archives of the release binary for macOS platforms.
 #
-# This script automatically detects the host operating system and architecture
-# to create a correctly named asset file that the `boot` CLI can discover
-# and download.
+# This script builds for both Apple Silicon and Intel architectures and creates
+# correctly named asset files that the `boot` CLI can discover and download.
+#
+# Prerequisites:
+#   - `rustup` must be installed.
 #
 # Usage:
 #   From the root of the boot-rust repository, run:
 #   ./scripts/create_release_zip.sh
 #
-# The output will be a file like `target/release/boot-rust-x86_64-apple-darwin.zip`.
+# The output will be multiple .zip files in the `target/` directory.
 
 set -e # Exit immediately if a command exits with a non-zero status.
 
 # --- Configuration ---
 # The name of your plugin binary. This should match the `name` in your Cargo.toml.
 PLUGIN_NAME="boot-rust"
-# The directory where the final zip file will be placed.
-RELEASE_DIR="target/release"
+# The root directory where release assets will be created.
+RELEASE_DIR="target"
+
+# An array of Rust target triples to build for.
+# We are now only building for macOS targets.
+TARGETS=(
+  "aarch64-apple-darwin"      # For Apple Silicon (M1/M2/M3)
+  "x86_64-apple-darwin"       # For Intel-based Macs
+)
 
 # --- Main Logic ---
 
@@ -28,60 +36,53 @@ function log() {
   echo -e "\n\e[1;34m>> $1\e[0m"
 }
 
-# 1. Determine OS and Architecture
-# -----------------------------------------------------------------------------
-log "Detecting OS and architecture..."
+log "Starting macOS release build for ${PLUGIN_NAME}..."
 
-os=""
-arch=$(uname -m)
+# Ensure the release directory exists.
+mkdir -p "${RELEASE_DIR}"
 
-case "$(uname -s)" in
-  Linux*)
-    os="unknown-linux-gnu"
-    ;;
-  Darwin*)
-    os="apple-darwin"
-    ;;
-  *)
-    echo "Error: Unsupported operating system." >&2
-    exit 1
-    ;;
-esac
+for target in "${TARGETS[@]}"; do
+  log "Building for target: ${target}"
 
-echo "OS: $os"
-echo "Arch: $arch"
+  # 1. Install the Rust toolchain for the target platform.
+  rustup target add "${target}"
 
-# 2. Build the Release Binary
-# -----------------------------------------------------------------------------
-log "Building the release binary with Cargo..."
-cargo build --release
+  # 2. Build the release binary using the standard `cargo build`.
+  cargo build --release --target "${target}"
 
-# Path to the compiled binary.
-BINARY_PATH="${RELEASE_DIR}/${PLUGIN_NAME}"
+  # 3. Define platform-specific variables for naming the final asset.
+  asset_arch=""
+  asset_os="apple-darwin" # This is constant for both macOS targets
 
-if [ ! -f "$BINARY_PATH" ]; then
-    echo "Error: Release binary not found at ${BINARY_PATH}" >&2
-    exit 1
-fi
+  case "${target}" in
+    aarch64-apple-darwin)
+      asset_arch="arm64"
+      ;;
+    x86_64-apple-darwin)
+      asset_arch="x86_64"
+      ;;
+    *)
+      echo "Warning: Unhandled target '${target}' for asset naming. Skipping."
+      continue
+      ;;
+  esac
 
-echo "Build complete. Binary is at ${BINARY_PATH}"
+  # 4. Create the ZIP archive.
+  binary_path="${RELEASE_DIR}/${target}/release/${PLUGIN_NAME}"
+  zip_filename="${PLUGIN_NAME}-${asset_arch}-${asset_os}.zip"
+  zip_path="${RELEASE_DIR}/${zip_filename}"
 
-# 3. Create the ZIP Archive
-# -----------------------------------------------------------------------------
-# Construct the final filename based on the detected platform.
-# e.g., boot-rust-x86_64-apple-darwin.zip
-ZIP_FILENAME="${PLUGIN_NAME}-${arch}-${os}.zip"
-ZIP_PATH="${RELEASE_DIR}/${ZIP_FILENAME}"
+  if [ ! -f "${binary_path}" ]; then
+      echo "Warning: Build for ${target} failed or binary not found. Skipping."
+      continue
+  fi
 
-log "Creating ZIP archive: ${ZIP_PATH}"
+  echo "Creating ZIP archive: ${zip_path}"
+  # Use `zip -j` to store files at the root of the archive without directory structure.
+  zip -j "${zip_path}" "${binary_path}"
+done
 
-# Use `zip` to create the archive.
-# -j "junk paths" flag stores files at the root of the zip, removing the directory structure.
-zip -j "$ZIP_PATH" "$BINARY_PATH"
-
-# 4. Final Summary
-# -----------------------------------------------------------------------------
-log "✅ Success!"
-echo "Release asset created at: ${ZIP_PATH}"
-echo "You can now upload this file to your GitHub release."
-
+# 5. Final Summary
+log "✅ All builds complete!"
+echo "Release assets have been created in the '${RELEASE_DIR}/' directory."
+echo "You can now upload these .zip files to your GitHub release."
